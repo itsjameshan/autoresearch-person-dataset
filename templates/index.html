@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>人群计数检测系统</title>
+    <link rel="stylesheet" href="/templates/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- 左侧：图片 -->
+        <div class="card">
+            <h3>🎯 检测画面</h3>
+            <div id="canvas">
+                <img id="showImg" src="" alt="待检测图片">
+            </div>
+            <div style="margin-top:15px">
+                <input type="file" id="singleFile" accept="image/*" hidden>
+                <button class="btn" onclick="document.getElementById('singleFile').click()">选择图片</button>
+                <button class="btn btn-green" onclick="detectSingle()">开始检测</button>
+            </div>
+        </div>
+
+        <!-- 右侧：结果 -->
+        <div class="card">
+            <h3>📊 检测结果</h3>
+            <p>总人数：<span id="total">0</span></p>
+            <div class="list" id="personList"></div>
+
+            <hr style="margin:20px 0">
+            <h3>📁 批量检测</h3>
+            <input type="file" id="batchFiles" accept="image/*" multiple hidden>
+            <button class="btn" onclick="document.getElementById('batchFiles').click()">选择多张图片</button>
+            <button class="btn btn-orange" onclick="detectBatch()">开始批量检测</button>
+            <div class="batch-list" id="batchResult"></div>
+            <a id="downloadExcel" style="display:none" class="btn">下载 EXCEL</a>
+        </div>
+    </div>
+
+    <script src="/templates/js/main.js"></script>
+</body>
+</html>

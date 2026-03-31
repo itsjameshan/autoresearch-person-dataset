@@ -1,0 +1,8 @@
+path: D:/PythonProject/person_dataset
+train: images/train/image
+val: images/val/image
+test: images/test/image
+
+nc: 1
+names:
+  0: person

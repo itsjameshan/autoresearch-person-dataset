@@ -1,0 +1,50 @@
+# ==================== Dataset (images & labels) ====================
+images/
+labels/
+*.cache
+
+# ==================== Model weights ====================
+*.pt
+*.onnx
+*.engine
+*.torchscript
+*.tflite
+*.mlmodel
+*.pb
+
+# ==================== Training runs & results ====================
+runs/
+person_count/
+wandb/
+
+# ==================== Archives ====================
+*.zip
+*.tar.gz
+*.rar
+
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+venv/
+env/
+.venv/
+
+# ==================== IDE ====================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==================== OS ====================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==================== Claude Code ====================
+.claude/
