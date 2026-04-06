@@ -101,7 +101,7 @@ def check_model_assisted_missing(model_path, image_dir, label_dir, conf_thresh=0
                         gt_boxes.append([cx - w/2, cy - h/2, cx + w/2, cy + h/2])
 
         # Run inference
-        results = model(img_path, conf=conf_thresh, iou=0.35, device="mps", verbose=False)
+        results = model(img_path, conf=conf_thresh, iou=0.35, device=0, verbose=False)
         if results[0].boxes is None:
             continue
 
@@ -139,9 +139,9 @@ def run_quality_check(data_yaml, model_path=None):
 
     base = Path(data_yaml).parent
     train_img = base / cfg.get("train", "images/train")
-    train_lbl = Path(str(train_img).replace("/images/", "/labels/"))
+    train_lbl = Path(str(train_img).replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep))
     val_img = base / cfg.get("val", "images/val")
-    val_lbl = Path(str(val_img).replace("/images/", "/labels/"))
+    val_lbl = Path(str(val_img).replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep))
 
     print("=" * 60)
     print("DATA QUALITY REPORT")

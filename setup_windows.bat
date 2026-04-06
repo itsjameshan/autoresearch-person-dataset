@@ -18,8 +18,8 @@ if errorlevel 1 (
 REM Check CUDA
 python -c "import torch; print(f'PyTorch {torch.__version__}'); print(f'CUDA: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" 2>nul
 if errorlevel 1 (
-    echo Installing PyTorch with CUDA 12.8 support...
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+    echo Installing PyTorch with CUDA 12.4 support...
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 )
 
 REM Install dependencies
