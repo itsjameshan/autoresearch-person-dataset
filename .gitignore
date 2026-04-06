@@ -15,7 +15,20 @@ labels/
 # ==================== Training runs & results ====================
 runs/
 person_count/
+autoresearch_runs/
 wandb/
+result/
+run.log
+
+# ==================== ONNX data ====================
+*.onnx.data
+onnx_data/
+weights/
+yolov12/
+
+# ==================== Web assets ====================
+static/
+templates/
 
 # ==================== Archives ====================
 *.zip

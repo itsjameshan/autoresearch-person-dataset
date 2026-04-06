@@ -1,7 +1,7 @@
-path: D:/PythonProject/person_dataset
-train: images/train/image
-val: images/val/image
-test: images/test/image
+path: /Users/jameshan/Developments/autoresearch/person_dataset
+train: images/train
+val: images/val
+test: images/test
 
 nc: 1
 names:
