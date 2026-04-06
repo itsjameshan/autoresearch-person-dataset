@@ -1,1 +1,2 @@
 commit	cds	mAP50	mAP50_95	small_obj_recall	precision	recall	counting_mae	inference_ms	memory_gb	epochs	status	description
+604dfa9	0.2122	0.2248	0.0658	0.0000	0.2600	0.5523	0.7818	42.1	N/A	10	baseline	yolov8s imgsz=320 cpu batch=8 (MPS swap-fills-disk on 8GB M1)

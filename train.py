@@ -12,6 +12,10 @@ DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
 
 import os
 import sys
+
+# ── Enable MPS fallback for ops not yet implemented on MPS (e.g. torchvision::nms) ──
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import torch
 import ultralytics
 
@@ -34,11 +38,11 @@ MODEL = "yolov8s.pt"
 
 # Dataset
 DATA_YAML = "person.yaml"
-IMGSZ = 320  # CPU training: 4x faster than imgsz=640 (15s/it→4s/it); MPS OOM/swap-fills-disk on 8GB M1
+IMGSZ = 640  # 2x imgsz vs baseline: critical for small_obj_recall (was 0.000 at imgsz=320)
 
 # Training
-EPOCHS = 10   # CPU at imgsz=320: ~50min/epoch; 10 epochs = ~8h baseline (viable for loop)
-BATCH = 8
+EPOCHS = 5    # CPU at imgsz=640: ~2.5h/epoch; 5 epochs = ~12h (viable for loop)
+BATCH = 4     # reduced from 8 to avoid memory pressure at higher imgsz
 PATIENCE = 5
 DEVICE = "cpu"  # MPS causes swap-driven disk fill on 8GB M1 (swap hits 90%+, disk fills at 1GB/5min)
 
