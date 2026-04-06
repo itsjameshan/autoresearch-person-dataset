@@ -18,6 +18,8 @@ person_count/
 autoresearch_runs/
 wandb/
 result/
+pipeline_val/
+build_pipeline_val.py
 run.log
 
 # ==================== ONNX data ====================
