@@ -37,9 +37,9 @@ DATA_YAML = "person.yaml"
 IMGSZ = 640  # reduced from 1280 — MPS OOM at 1280 on 8GB M1 (7.4GB used, only 600MB headroom)
 
 # Training
-EPOCHS = 100
+EPOCHS = 15   # capped: x86/Rosetta M1 Air = ~3.5h/epoch; 100 epochs = 5+ days (not viable for loop)
 BATCH = 4
-PATIENCE = 30
+PATIENCE = 7
 DEVICE = "mps"  # Apple Silicon GPU
 
 # Learning rate
