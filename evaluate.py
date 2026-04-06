@@ -125,7 +125,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         batch=4,
         conf=0.001,
         iou=0.6,
-        device="mps",
+        device=0,
         verbose=False,
         plots=False,
     )
@@ -154,7 +154,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         val_img_dir = data_dir / val_img_rel
 
     # Derive label dir from image dir
-    val_label_dir = Path(str(val_img_dir).replace("/images/", "/labels/"))
+    val_label_dir = Path(str(val_img_dir).replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep))
 
     val_images = sorted(glob.glob(str(val_img_dir / "*.JPG")) +
                         glob.glob(str(val_img_dir / "*.jpg")) +
@@ -179,7 +179,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
             conf=DEPLOY_CONF,
             iou=DEPLOY_IOU_NMS,
             imgsz=imgsz,
-            device="mps",
+            device=0,
             verbose=False,
         )
         res = results[0]
@@ -222,13 +222,13 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     # Warmup
     for img in timing_imgs[:WARMUP_IMAGES]:
         model(img, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS, imgsz=imgsz,
-              device="mps", verbose=False)
+              device=0, verbose=False)
     # Timed runs
     times = []
     for img in timing_imgs[WARMUP_IMAGES:]:
         t0 = time.time()
         model(img, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS, imgsz=imgsz,
-              device="mps", verbose=False)
+              device=0, verbose=False)
         times.append((time.time() - t0) * 1000)
     inference_ms = float(np.mean(times)) if times else 0.0
 
@@ -236,7 +236,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     all_confs = []
     for img_path in val_images[:50]:  # Sample 50 images for speed
         results = model(img_path, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS,
-                        imgsz=imgsz, device="mps", verbose=False)
+                        imgsz=imgsz, device=0, verbose=False)
         if results[0].boxes is not None and len(results[0].boxes) > 0:
             all_confs.extend(results[0].boxes.conf.cpu().numpy().tolist())
     mean_confidence = float(np.mean(all_confs)) if all_confs else 0.0
@@ -254,16 +254,18 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     target_met = precision >= PRECISION_GATE and recall >= RECALL_GATE
 
     # ── Peak memory ──
+    peak_memory_mb = 0.0
     try:
-        import resource
-        peak_memory_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
-        # macOS reports bytes, Linux reports KB
-        if sys.platform == "darwin":
+        if torch.cuda.is_available():
+            peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+        elif sys.platform == "darwin":
+            import resource
             peak_memory_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
-        else:
+        elif sys.platform != "win32":
+            import resource
             peak_memory_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     except Exception:
-        peak_memory_mb = 0.0
+        pass
 
     metrics = {
         "cds": round(cds, 4),
@@ -348,7 +350,7 @@ def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms
 
                 # Detect
                 res = model(tile, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS,
-                            imgsz=imgsz, device="mps", verbose=False)
+                            imgsz=imgsz, device=0, verbose=False)
 
                 if res[0].boxes is not None and len(res[0].boxes) > 0:
                     boxes = res[0].boxes.xyxy.cpu().numpy()

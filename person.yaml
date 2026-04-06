@@ -1,4 +1,4 @@
-path: /Users/jameshan/Developments/autoresearch/person_dataset
+path: D:/PythonProject/person_dataset
 train: images/train
 val: images/val
 test: images/test

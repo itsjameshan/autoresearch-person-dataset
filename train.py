@@ -36,11 +36,11 @@ MODEL = "yolov8s.pt"
 DATA_YAML = "person.yaml"
 IMGSZ = 1280
 
-# Training
+# Training — RTX 5070 12GB VRAM, 64GB RAM
 EPOCHS = 100
-BATCH = 8
+BATCH = 16          # RTX 5070 12GB can handle batch=16 at imgsz=1280
 PATIENCE = 30
-DEVICE = "mps"  # Apple Silicon GPU
+DEVICE = 0          # CUDA GPU 0
 
 # Learning rate
 LR0 = 0.01
@@ -68,8 +68,8 @@ CLS = 0.5
 
 # Other
 AMP = True
-CACHE = False  # "ram" uses too much on 8GB M1
-WORKERS = 0
+CACHE = "ram"       # 64GB RAM — cache entire dataset in memory
+WORKERS = 8         # i5-14600KF 14 cores
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════
@@ -128,10 +128,14 @@ def train():
         verbose=True,
     )
 
-    # Find best model
-    best_pt = os.path.join(PROJECT, NAME, "weights", "best.pt")
+    # Find best model — use actual save_dir from results
+    try:
+        save_dir = str(results.save_dir)
+    except Exception:
+        save_dir = os.path.join(PROJECT, NAME)
+    best_pt = os.path.join(save_dir, "weights", "best.pt")
     if not os.path.exists(best_pt):
-        best_pt = os.path.join(PROJECT, NAME, "weights", "last.pt")
+        best_pt = os.path.join(save_dir, "weights", "last.pt")
 
     # Get epochs completed from results
     try:
