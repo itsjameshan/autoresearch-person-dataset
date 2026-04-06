@@ -38,7 +38,7 @@ IMGSZ = 640  # reduced from 1280 — MPS OOM at 1280 on 8GB M1 (7.4GB used, only
 
 # Training
 EPOCHS = 100
-BATCH = 8  # safe at imgsz=640, uses ~4GB MPS
+BATCH = 4
 PATIENCE = 30
 DEVICE = "mps"  # Apple Silicon GPU
 
