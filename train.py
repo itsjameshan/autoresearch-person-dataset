@@ -34,13 +34,13 @@ MODEL = "yolov8s.pt"
 
 # Dataset
 DATA_YAML = "person.yaml"
-IMGSZ = 640  # reduced from 1280 — MPS OOM at 1280 on 8GB M1 (7.4GB used, only 600MB headroom)
+IMGSZ = 320  # CPU training: 4x faster than imgsz=640 (15s/it→4s/it); MPS OOM/swap-fills-disk on 8GB M1
 
 # Training
-EPOCHS = 15   # capped: x86/Rosetta M1 Air = ~3.5h/epoch; 100 epochs = 5+ days (not viable for loop)
-BATCH = 4
-PATIENCE = 7
-DEVICE = "mps"  # Apple Silicon GPU
+EPOCHS = 10   # CPU at imgsz=320: ~50min/epoch; 10 epochs = ~8h baseline (viable for loop)
+BATCH = 8
+PATIENCE = 5
+DEVICE = "cpu"  # MPS causes swap-driven disk fill on 8GB M1 (swap hits 90%+, disk fills at 1GB/5min)
 
 # Learning rate
 LR0 = 0.01
