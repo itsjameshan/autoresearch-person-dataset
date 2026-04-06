@@ -38,7 +38,7 @@ IMGSZ = 1280
 
 # Training
 EPOCHS = 100
-BATCH = 8
+BATCH = 4
 PATIENCE = 30
 DEVICE = "mps"  # Apple Silicon GPU
 
@@ -128,10 +128,14 @@ def train():
         verbose=True,
     )
 
-    # Find best model
-    best_pt = os.path.join(PROJECT, NAME, "weights", "best.pt")
+    # Find best model — use actual save_dir from results (handles runs/detect/ prefix)
+    try:
+        save_dir = str(results.save_dir)
+    except Exception:
+        save_dir = os.path.join(PROJECT, NAME)
+    best_pt = os.path.join(save_dir, "weights", "best.pt")
     if not os.path.exists(best_pt):
-        best_pt = os.path.join(PROJECT, NAME, "weights", "last.pt")
+        best_pt = os.path.join(save_dir, "weights", "last.pt")
 
     # Get epochs completed from results
     try:
