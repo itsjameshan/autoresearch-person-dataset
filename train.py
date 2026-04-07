@@ -29,8 +29,8 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG — Agent modifies this section
 # ══════════════════════════════════════════════════════════════
 
-# Model
-MODEL = "yolov8s.pt"
+# Model — 必须使用仓库内路径（相对 train.py 所在目录），勿写裸文件名如 yolo12s.pt（否则会联网下载）
+MODEL = "person_dataset/yolo12s.pt"
 
 # Dataset
 DATA_YAML = "person_dataset/person.yaml"
@@ -38,7 +38,7 @@ IMGSZ = 1280
 
 # Training — RTX 5070 12GB VRAM, 64GB RAM
 EPOCHS = 100
-BATCH = 16          # RTX 5070 12GB can handle batch=16 at imgsz=1280
+BATCH = 8
 PATIENCE = 30
 DEVICE = 0          # CUDA GPU 0
 
@@ -57,9 +57,9 @@ SCALE = 0.5
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 1.0
-MIXUP = 0.1
-COPY_PASTE = 0.1
-ERASING = 0.4
+MIXUP = 0.3
+COPY_PASTE = 0.5
+ERASING = 0.6
 CLOSE_MOSAIC = 20
 
 # Loss weights
@@ -68,8 +68,9 @@ CLS = 0.5
 
 # Other
 AMP = True
-CACHE = "ram"       # 64GB RAM — cache entire dataset in memory
-WORKERS = 8         # i5-14600KF 14 cores
+# Windows + ollama_runner 子进程里 ram cache + 多 workers 易 MemoryError；稳定后可改回 "ram" / 提高 workers
+CACHE = False
+WORKERS = 2
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════
@@ -79,12 +80,34 @@ SINGLE_CLS = True
 PROJECT = "autoresearch_runs"
 NAME = "current"
 
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _abs_under_repo(rel_or_abs: str) -> str:
+    if os.path.isabs(rel_or_abs):
+        return os.path.normpath(rel_or_abs)
+    return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
+
 
 def train():
-    model = YOLO(MODEL)
+    model_path = _abs_under_repo(MODEL)
+    if not os.path.isfile(model_path):
+        print(
+            f"[FATAL] 找不到权重: {model_path}\n"
+            "  请将 .pt 放在 person_dataset/ 下，且 MODEL 写成 person_dataset/xxx.pt；"
+            "勿使用裸文件名，否则会触发 Ultralytics 从 GitHub 下载。"
+        )
+        sys.exit(1)
+
+    data_yaml = _abs_under_repo(DATA_YAML)
+    if not os.path.isfile(data_yaml):
+        print(f"[FATAL] 找不到数据配置: {data_yaml}")
+        sys.exit(1)
+
+    model = YOLO(model_path)
 
     results = model.train(
-        data=DATA_YAML,
+        data=data_yaml,
         epochs=EPOCHS,
         imgsz=IMGSZ,
         batch=BATCH,

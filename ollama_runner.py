@@ -2,13 +2,15 @@
 ollama_runner.py — Autonomous experiment loop driven by Ollama (local LLM).
 
 Replaces Claude Code / Codex CLI for machines without cloud AI access.
-Uses Ollama API (http://localhost:11434). Default model: qwen2.5-coder:14b.
+Uses Ollama API (http://localhost:11434). Default model: gemma3:4b (也可用
+AUTORESEARCH_OLLAMA_MODEL 指向 `ollama list` 中的任意名称，例如 qwen2.5-coder:14b)。
 
 Usage:
   1. Start Ollama (tray app or: ollama serve)
-  2. Pull a model: ollama pull qwen2.5-coder:14b
-     Optional: set AUTORESEARCH_OLLAMA_MODEL to any name from `ollama list` (e.g. gemma3:4b).
-  3. Run: python ollama_runner.py
+     Windows: & "$env:LOCALAPPDATA\\Programs\\Ollama\\ollama.exe" list
+  2. Pull: ollama pull gemma3:4b（可选再 pull qwen2.5-coder:14b）
+  3. Optional: $env:AUTORESEARCH_OLLAMA_MODEL = "<exact name from list>"
+  4. Run: python ollama_runner.py
      全程无交互，直到：达标连击 / 连续 discard 平台期 / 满 MAX_EXPERIMENTS / 你 Ctrl+C。
      若 Git push 弹窗打断：先配置凭据，或 PowerShell 临时跳过远程同步：
        $env:AUTORESEARCH_SKIP_PUSH="1"; python ollama_runner.py
@@ -35,8 +37,9 @@ from collections import deque
 # ══════════════════════════════════════════════════════════════
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-# Override with env if your `ollama list` uses another name (e.g. only gemma3:4b installed).
-OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "qwen2.5-coder:14b")
+OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
+# main() 会用本机 /api/tags 校正为「ollama list」里的准确名称，减少 404。
+OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "gemma3:4b").strip() or "gemma3:4b"
 BRANCH = "autoresearch/crowd-win"
 MAX_EXPERIMENTS = 20
 COOLDOWN_SECONDS = 30        # Less than Mac (RTX 5070 has active cooling)
@@ -129,6 +132,62 @@ def print_progress_header_cn(
 # OLLAMA API
 # ══════════════════════════════════════════════════════════════
 
+def _ollama_cli_hint():
+    exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama.exe")
+    if os.path.isfile(exe):
+        return f'& "{exe}" list'
+    return "ollama list  （若未加入 PATH，请用开始菜单安装目录下的 ollama.exe）"
+
+
+def resolve_ollama_model_name(wanted: str) -> str:
+    """
+    将 wanted 映射为本机已安装列表中的准确名称（避免 qwen2.5-coder:14b vs :latest 等导致 HTTP 404）。
+    """
+    try:
+        req = urllib.request.Request(OLLAMA_TAGS_URL)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            names = [m.get("name", "") for m in json.loads(resp.read().decode("utf-8")).get("models", [])]
+    except Exception as e:
+        print(f"[WARN] 无法读取 Ollama 模型列表 ({e})，将按原样使用: {wanted!r}")
+        return wanted
+
+    if not names:
+        print("[FATAL] Ollama 中没有任何模型。请执行 pull 后再运行。")
+        print(f"  {_ollama_cli_hint()}")
+        sys.exit(1)
+
+    if wanted in names:
+        return wanted
+
+    base = wanted.split(":")[0] if ":" in wanted else wanted
+    for n in names:
+        if n == wanted or n.startswith(wanted + ":"):
+            print(f"[INFO] 模型名已对齐: {wanted!r} → {n!r}（以本机 ollama list 为准）")
+            return n
+
+    for n in names:
+        if n.startswith(base + ":") or n == base:
+            print(f"[INFO] 模型名已对齐: {wanted!r} → {n!r}")
+            return n
+
+    # 请求的模型尚未 pull 完：优先用本机已有的 gemma3，便于先跑 autoresearch
+    for n in names:
+        if n.startswith("gemma3"):
+            print(f"[WARN] 未找到 {wanted!r}（可能仍在下载），暂用本机已有: {n!r}")
+            return n
+    for n in names:
+        if "qwen" in n.lower():
+            print(f"[WARN] 未找到 {wanted!r}，暂用本机已有: {n!r}")
+            return n
+
+    print(f"[FATAL] 未找到与 {wanted!r} 匹配的模型，且本机无 gemma/qwen 可降级。已有列表:")
+    for n in names:
+        print(f"    {n}")
+    print(f"  请设置: $env:AUTORESEARCH_OLLAMA_MODEL = \"<上列之一>\"")
+    print(f"  或执行: {_ollama_cli_hint()}")
+    sys.exit(1)
+
+
 def query_ollama(prompt, temperature=0.7, max_tokens=4096):
     """Send a prompt to Ollama and return the response text."""
     payload = json.dumps({
@@ -151,10 +210,22 @@ def query_ollama(prompt, temperature=0.7, max_tokens=4096):
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data.get("response", "")
+    except urllib.error.HTTPError as e:
+        print(f"ERROR: Ollama HTTP {e.code} at {OLLAMA_URL}")
+        if e.code == 404:
+            print(f"  多为模型名不对：当前请求 model={OLLAMA_MODEL!r}")
+            print(f"  请运行 {_ollama_cli_hint()} 把名称设成与 NAME 列完全一致（或删掉环境变量让脚本自动对齐）。")
+        try:
+            b = e.read().decode("utf-8", errors="replace")[:400]
+            if b.strip():
+                print(f"  Body: {b.strip()}")
+        except Exception:
+            pass
+        return None
     except urllib.error.URLError as e:
-        print(f"ERROR: Cannot connect to Ollama at {OLLAMA_URL}")
-        print(f"Make sure Ollama is running: ollama serve")
-        print(f"Error: {e}")
+        print(f"ERROR: Cannot reach Ollama at {OLLAMA_URL}")
+        print("  确认托盘里 Ollama 已启动；勿重复 ollama serve（端口占用说明服务已在跑）。")
+        print(f"  {e}")
         return None
     except Exception as e:
         print(f"ERROR: Ollama query failed: {e}")
@@ -229,7 +300,7 @@ def apply_train_changes(new_config_block):
     """Replace the EXPERIMENT CONFIG section in train.py with new values.
 
     The LLM returns a block of Python variable assignments like:
-        MODEL = "yolo12s.pt"
+        MODEL = "person_dataset/yolo12s.pt"
         BATCH = 16
         ...
     We extract valid assignments and update train.py.
@@ -459,6 +530,8 @@ Your goal: maximize CDS (Crowd Detection Score). CDS includes ~10% weight on lat
 
 Hardware: Windows, RTX 5070 12GB VRAM, 64GB RAM, i5-14600KF.
 Constraints: batch<=16 at imgsz=1280 (12GB VRAM), cache="ram" is fine (64GB).
+WEIGHTS RULE (mandatory): All MODEL paths MUST be under person_dataset/ with the exact filename on disk.
+Never use bare names like yolo12s.pt or yolo12n.pt — Ultralytics will download from the internet into the repo root.
 
 Current train.py config:
 ```python
@@ -479,7 +552,8 @@ This is experiment #{experiment_num}. Based on the history, propose ONE specific
 
 Rules:
 - Only change variables in the EXPERIMENT CONFIG section
-- Available models: yolov8s.pt, yolov8n.pt, yolo12n.pt, yolo12s.pt, yolo12l.pt
+- MODEL must be EXACTLY one of these local files (repo root = autoresearch project folder), never a bare name:
+  person_dataset/yolov8n.pt, person_dataset/yolo12n.pt, person_dataset/yolo12s.pt, person_dataset/yolo12l.pt
 - Do NOT change DEVICE, DATA_YAML, or anything below "TRAINING — do not modify"
 - Keep changes focused — one hypothesis per experiment
 - If recent experiments failed, try something different
@@ -487,7 +561,7 @@ Rules:
 Respond with EXACTLY:
 1. One line: DESCRIPTION: <what you're trying and why>
 2. Then ONLY the Python variable assignments that change, e.g.:
-MODEL = "yolo12s.pt"
+MODEL = "person_dataset/yolo12s.pt"
 BATCH = 12
 
 Do not include unchanged variables. Do not include explanations after the assignments.
@@ -523,8 +597,11 @@ Do not include unchanged variables. Do not include explanations after the assign
 # ══════════════════════════════════════════════════════════════
 
 def main():
+    global OLLAMA_MODEL
+
     session_start = time.time()
     rolling_train_sec = deque(maxlen=5)
+    OLLAMA_MODEL = resolve_ollama_model_name(OLLAMA_MODEL)
 
     print("=" * 60)
     print("AUTORESEARCH — Ollama 自主实验循环（中文进度说明）")
@@ -537,7 +614,9 @@ def main():
     # Check Ollama connectivity
     test = query_ollama("Say OK", max_tokens=10)
     if test is None:
-        print("\n【致命错误】无法连接 Ollama，请确认托盘或 ollama serve 已运行。")
+        print("\n【致命错误】无法连接 Ollama 或模型不可用（连接错误、HTTP 404 等）。")
+        print("  请确认托盘或 ollama serve 已运行，且模型名与 `ollama list` 一致。")
+        print(f"  查看模型: {_ollama_cli_hint()}")
         sys.exit(1)
     print(f"【就绪】Ollama 已连接，使用模型: {OLLAMA_MODEL}")
 

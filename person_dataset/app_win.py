@@ -6,6 +6,7 @@ import numpy as np
 import onnxruntime as ort
 from datetime import datetime
 import os
+import sys
 import warnings
 import webbrowser
 import traceback
@@ -19,13 +20,19 @@ import pandas as pd
 
 warnings.filterwarnings('ignore')
 
+# Windows 控制台默认 GBK，print(emoji) 会 UnicodeEncodeError
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 同上：勿依赖 cwd，否则从别的目录 python person_dataset/app_win.py 会 404
-app = Flask(
-    __name__,
-    static_folder=os.path.join(BASE_DIR, "static"),
-    static_url_path="/static",
-)
+# 页面与静态资源在 templates/；勿依赖 cwd，否则从别的目录启动会 404
+TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
+
+app = Flask(__name__, static_folder=None)
 CORS(app)
 app.config['SECRET_KEY'] = 'person_detect'
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
@@ -290,16 +297,14 @@ def detect_img_bytes(img_bytes, conf=0.5, iou=0.5):
     }, None
 
 
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-
-
-@app.route('/')
+@app.route("/")
 def index():
-    return send_from_directory(STATIC_DIR, "index.html")
+    return send_from_directory(TEMPLATE_DIR, "index.html")
 
-@app.route('/static/<path:filename>')
-def static_files(filename):
-    return send_from_directory(STATIC_DIR, filename)
+
+@app.route("/templates/<path:filename>")
+def serve_templates(filename):
+    return send_from_directory(TEMPLATE_DIR, filename)
 
 
 @app.route('/api/config', methods=['GET'])
@@ -496,14 +501,14 @@ def health():
     })
 
 
-@app.route('/a')
+@app.route("/a")
 def pipeline_page_a():
-    return send_from_directory(STATIC_DIR, "page_a.html")
+    return send_from_directory(TEMPLATE_DIR, "page_a.html")
 
 
-@app.route('/b')
+@app.route("/b")
 def pipeline_page_b():
-    return send_from_directory(STATIC_DIR, "page_b.html")
+    return send_from_directory(TEMPLATE_DIR, "page_b.html")
 
 
 @app.route('/api/pipeline_a', methods=['POST'])

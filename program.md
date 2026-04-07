@@ -6,7 +6,7 @@
 - **RAM**: 64GB DDR4-3200
 - **CPU**: Intel i5-14600KF (14 cores, 20 threads)
 - **Storage**: 1TB NVMe SSD
-- **Agent**: Ollama + qwen2.5-coder:14b (local, no cloud required)
+- **Agent**: Ollama（本地）；默认 **gemma3:4b**，可选 `AUTORESEARCH_OLLAMA_MODEL=qwen2.5-coder:14b`
 
 ## Quick Start
 
@@ -19,14 +19,16 @@ git checkout autoresearch/crowd-win
 # 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. 唯一数据根目录：仓库内 person_dataset/（勿再维护单独的 D:\autoresearch\person_dataset）。
+# 3. 唯一数据根目录：仓库内 person_dataset/（勿再维护单独的盘符路径副本）。
 #    person_dataset/images/{train,val,test}/ 与 person_dataset/labels/...
+#    预训练权重示例: person_dataset/yolo12s.pt、yolo12n.pt、yolo12l.pt、yolov8n.pt
 #    大文件已被 .gitignore 排除，勿 commit/push。
 
 # 4. Start Ollama
 ollama serve
 # (in another terminal)
-ollama pull qwen2.5-coder:14b
+ollama pull gemma3:4b
+# 可选更强代码模型: ollama pull qwen2.5-coder:14b  且 $env:AUTORESEARCH_OLLAMA_MODEL="qwen2.5-coder:14b"
 
 # 5. Run the autonomous experiment loop
 python ollama_runner.py
@@ -39,7 +41,7 @@ python ollama_runner.py
 1. Connects to Ollama (localhost:11434)
 2. Reads this file, results.tsv, suggestions.md for context
 3. Runs baseline (no changes to train.py)
-4. Asks qwen2.5-coder:14b to propose train.py modifications
+4. Asks the selected Ollama model (default gemma3:4b) to propose train.py modifications
 5. Applies changes, git commits, trains, evaluates
 6. Keep (push) or discard (reset) based on CDS improvement
 7. Repeats until stop condition met
@@ -54,10 +56,18 @@ CDS = 0.25×mAP50 + 0.25×mAP50-95 + 0.10×F1 + 0.15×counting_acc + 0.15×small
 
 Higher is better. Quality gates: precision ≥ 0.90, recall ≥ 0.85, and mean tile `inference_ms` ≤ latency cap (default / env `AUTORESEARCH_LATENCY_GATE_MS` in `evaluate.py`).
 
+## 预训练权重（本地，禁止触发下载）
+
+- **目录（相对仓库根 `autoresearch_new/`）**：`person_dataset/*.pt`
+- **`train.py` 里 `MODEL` 必须** 写成带前缀的路径，例如 `person_dataset/yolo12s.pt`。  
+  **禁止** 写成裸文件名（如 `yolo12s.pt`）：Ultralytics 会在**当前工作目录**找不到时从 GitHub **重新下载**。
+- **训练前会检查文件是否存在**；不存在则立即报错退出，避免默默下载。
+- 允许切换的本地文件（按你机器实际存在的为准）：`person_dataset/yolov8n.pt`、`person_dataset/yolo12n.pt`、`person_dataset/yolo12s.pt`、`person_dataset/yolo12l.pt` 等。
+
 ## What Gets Modified
 
 **Only `train.py`** — the EXPERIMENT CONFIG section:
-- Model: yolov8s.pt, yolo12n.pt, yolo12s.pt, yolo12l.pt
+- **Model (`MODEL`)**：仅允许 `person_dataset/<文件名>.pt` 形式（见上一节）
 - Hyperparameters: LR, batch size, epochs, patience
 - Data augmentation: mosaic, mixup, copy_paste, erasing, etc.
 - Loss weights: box, cls
@@ -75,8 +85,8 @@ Higher is better. Quality gates: precision ≥ 0.90, recall ≥ 0.85, and mean t
 |-----------|-------|--------|
 | DEVICE | 0 (CUDA) | RTX 5070 |
 | BATCH | 16 | 12GB VRAM handles batch=16 at imgsz=1280 |
-| CACHE | "ram" | 64GB RAM — entire dataset fits in memory |
-| WORKERS | 8 | 14 cores, 8 workers is sweet spot |
+| CACHE | False (default) | 避免 Windows 下 ram cache + 多进程 dataloader 导致 MemoryError；内存充裕可试 `"ram"` |
+| WORKERS | 2 (default) | 降低 spawn 子进程峰值；机器吃满再逐步提高 |
 | IMGSZ | 1280 | Full resolution, no compromise needed |
 | AMP | True | RTX 5070 has fast FP16 |
 
@@ -111,8 +121,8 @@ powershell -c "Get-Content run.log -Tail 20"  # Current training progress
 
 Ollama 每轮只改 **一个** 明确假设；优先从上到下（先大方向、再细调），避免同一轮堆多项大改。
 
-1. **模型体量**：`yolo12n` → `yolo12s` →（显存允许再）`yolo12l` / `yolov8s` 对比；先定「精度–速度」再动别的。
-2. **Batch 与显存**：在 `imgsz=1280` 下从 `BATCH=16` 起，仅当训练稳定且 VRAM 有余再试 20–24；OOM 则降 batch，不要同时加大模型。
+1. **模型体量**：`person_dataset/yolo12n.pt` → `yolo12s.pt` →（显存允许再）`yolo12l.pt` / `yolov8s`；`MODEL` 必须带 `person_dataset/` 前缀。
+2. **Batch 与显存**：在 `imgsz=1280` 下从 `BATCH=16` 起，仅当训练稳定且 VRAM 有余再试 20–24；OOM 则降 batch，不要同时加大模型。`yolo12l` + 12GB 可试 batch=8。
 3. **学习率与 schedule**：`LR0` / `LRF` / `cos_lr` 小幅调整；一次只改一类。
 4. **增强（单项）**：`mosaic`、`mixup`、`copy_paste`、`erasing` 等 **每次只动一两个参数**，便于归因。
 5. **Loss**：`box` / `cls` 权重微调。
