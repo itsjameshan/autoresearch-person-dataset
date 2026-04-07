@@ -1,9 +1,8 @@
 """
-evaluate.py — READ-ONLY evaluation script for autoresearch loop.
-DO NOT MODIFY THIS FILE. Agent modifies only train.py.
+evaluate.py — Evaluation contract for the autoresearch loop (agent edits train.py only).
 
 Computes CDS (Crowd Detection Score) and all metrics for the autoresearch
-keep/discard decision. Equivalent to Karpathy's prepare.py evaluate_bpb.
+keep/discard decision. CDS includes a latency term derived from inference_ms.
 """
 
 import os
@@ -28,12 +27,18 @@ from pathlib import Path
 # CONSTANTS — these define the evaluation contract, never change
 # ══════════════════════════════════════════════════════════════
 
-# CDS weights
-W_MAP50 = 0.30
-W_MAP50_95 = 0.30
+# CDS weights (must sum to 1.0)
+W_MAP50 = 0.25
+W_MAP50_95 = 0.25
 W_F1 = 0.10
 W_COUNTING = 0.15
 W_SMALL_OBJ = 0.15
+W_LATENCY = 0.10
+
+# Latency score: linear map inference_ms -> [0, 1], higher = faster.
+# Tune for your GPU; defaults suit ~1280 single-tile on mid/high NVIDIA.
+LATENCY_MS_FULL_SCORE = 25.0   # at or below -> latency_score = 1.0
+LATENCY_MS_ZERO_SCORE = 220.0  # at or above -> latency_score = 0.0
 
 # Deployment thresholds (from project doc)
 DEPLOY_CONF = 0.25
@@ -42,6 +47,27 @@ DEPLOY_IOU_NMS = 0.35
 # Quality gates
 PRECISION_GATE = 0.90
 RECALL_GATE = 0.85
+
+# 延迟硬门槛（与 inference_ms 同一测法：部署 conf/iou、warmup 后 val 子集均值）。
+# 默认按 RTX 5070 级 + 1280 单 tile、中等体量模型（如 yolo12s）的常见区间略留余量。
+_LATENCY_GATE_DEFAULT_MS = 115.0
+
+
+def get_latency_gate_ms():
+    """返回本次评估使用的延迟上限（ms）。优先读环境变量，便于甲方机器/笔记本验收不调代码。"""
+    raw = os.environ.get("AUTORESEARCH_LATENCY_GATE_MS", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            print(
+                "evaluate: invalid AUTORESEARCH_LATENCY_GATE_MS, using default",
+                file=sys.stderr,
+            )
+    return _LATENCY_GATE_DEFAULT_MS
+
 
 # Small object threshold: GT box area < 0.5% of image area
 SMALL_OBJ_AREA_THRESH = 0.005
@@ -232,6 +258,13 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         times.append((time.time() - t0) * 1000)
     inference_ms = float(np.mean(times)) if times else 0.0
 
+    span = LATENCY_MS_ZERO_SCORE - LATENCY_MS_FULL_SCORE
+    if span <= 0:
+        latency_score = 0.0
+    else:
+        latency_score = (LATENCY_MS_ZERO_SCORE - inference_ms) / span
+        latency_score = float(np.clip(latency_score, 0.0, 1.0))
+
     # ── Mean confidence of detections ──
     all_confs = []
     for img_path in val_images[:50]:  # Sample 50 images for speed
@@ -246,12 +279,23 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
            W_MAP50_95 * mAP50_95 +
            W_F1 * f1_optimal +
            W_COUNTING * counting_accuracy +
-           W_SMALL_OBJ * small_obj_recall)
+           W_SMALL_OBJ * small_obj_recall +
+           W_LATENCY * latency_score)
 
     # ── Quality gates ──
+    gate_ms = get_latency_gate_ms()
     precision_gate = "PASS" if precision >= PRECISION_GATE else f"FAIL({precision:.2f}<{PRECISION_GATE})"
     recall_gate = "PASS" if recall >= RECALL_GATE else f"FAIL({recall:.2f}<{RECALL_GATE})"
-    target_met = precision >= PRECISION_GATE and recall >= RECALL_GATE
+    latency_gate = (
+        "PASS"
+        if inference_ms <= gate_ms
+        else f"FAIL({inference_ms:.1f}ms>{gate_ms}ms)"
+    )
+    target_met = (
+        precision >= PRECISION_GATE
+        and recall >= RECALL_GATE
+        and inference_ms <= gate_ms
+    )
 
     # ── Peak memory ──
     peak_memory_mb = 0.0
@@ -279,9 +323,12 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         "counting_mae": round(counting_mae, 4),
         "mean_confidence": round(mean_confidence, 4),
         "inference_ms": round(inference_ms, 1),
+        "latency_score": round(latency_score, 4),
         "peak_memory_mb": round(peak_memory_mb, 1),
         "precision_gate": precision_gate,
         "recall_gate": recall_gate,
+        "latency_gate": latency_gate,
+        "latency_gate_ms": round(gate_ms, 1),
         "target_met": target_met,
     }
     return metrics
@@ -301,10 +348,13 @@ def print_metrics(metrics, epochs_completed=0):
     print(f"counting_mae:     {metrics['counting_mae']:.4f}")
     print(f"mean_confidence:  {metrics['mean_confidence']:.4f}")
     print(f"inference_ms:     {metrics['inference_ms']}")
+    print(f"latency_score:    {metrics['latency_score']:.4f}")
     print(f"peak_memory_mb:   {metrics['peak_memory_mb']}")
     print(f"epochs_completed: {epochs_completed}")
     print(f"precision_gate:   {metrics['precision_gate']}")
     print(f"recall_gate:      {metrics['recall_gate']}")
+    print(f"latency_gate:     {metrics['latency_gate']}")
+    print(f"latency_gate_ms:  {metrics['latency_gate_ms']}")
 
 
 def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms_iou=0.35):

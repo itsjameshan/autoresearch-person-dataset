@@ -9,6 +9,7 @@ Usage:
 """
 from flask import Flask, render_template, request, jsonify, send_from_directory
 import cv2
+import json
 import numpy as np
 import pandas as pd
 import io
@@ -27,7 +28,7 @@ warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024  # 大图切块；可按机器再调
 
 # ==================== Model Config ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +38,8 @@ CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 CLASSES = ["person"]
 PORT = 5000
+# 跨 tile 合并时的 NMS（与 evaluate.py 部署侧 0.35 对齐，可表单覆盖）
+GLOBAL_MERGE_IOU = 0.35
 
 # ==================== Load ONNX Model ====================
 if not os.path.exists(MODEL_PATH):
@@ -163,6 +166,72 @@ def postprocess_output(outputs, scale, pad_w, pad_h, orig_w, orig_h,
     return detections
 
 
+# ==================== Core inference (BGR array, tile-local coords) ====================
+def run_inference_on_bgr(img_bgr):
+    """Run ONNX on one BGR image (any size); returns list of person dicts in pixel coords of this image."""
+    input_img, scale, pad_w, pad_h, orig_w, orig_h = preprocess_image(img_bgr)
+    outputs = model_session.run(output_names, {input_name: input_img})
+    return postprocess_output(outputs, scale, pad_w, pad_h, orig_w, orig_h)
+
+
+def iter_sliding_tiles(img_bgr, tile_size, overlap):
+    """Yield (x0, y0, tile_bgr) for sliding windows. stride = tile_size - overlap."""
+    h, w = img_bgr.shape[:2]
+    overlap = max(0, min(int(overlap), tile_size - 1))
+    stride = max(1, tile_size - overlap)
+    for y0 in range(0, h, stride):
+        for x0 in range(0, w, stride):
+            x1 = min(x0 + tile_size, w)
+            y1 = min(y0 + tile_size, h)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            yield x0, y0, img_bgr[y0:y1, x0:x1]
+
+
+def merge_tiles_global_nms(payload, merge_iou):
+    """
+    payload: dict with orig_w, orig_h, tiles[]. Each tile has x0,y0 and persons[] in tile-local xyxy.
+    Returns (list of (box_np(4,), score), orig_w, orig_h).
+    """
+    orig_w = int(payload["orig_w"])
+    orig_h = int(payload["orig_h"])
+    all_boxes = []
+    all_scores = []
+    for t in payload.get("tiles", []):
+        x0, y0 = int(t["x0"]), int(t["y0"])
+        for p in t.get("persons", []):
+            all_boxes.append(
+                [
+                    float(p["x1"]) + x0,
+                    float(p["y1"]) + y0,
+                    float(p["x2"]) + x0,
+                    float(p["y2"]) + y0,
+                ]
+            )
+            all_scores.append(float(p["conf"]))
+    if not all_boxes:
+        return [], orig_w, orig_h
+    boxes = np.array(all_boxes, dtype=np.float32)
+    scores = np.array(all_scores, dtype=np.float32)
+    keep = nms(boxes, scores, float(merge_iou))
+    merged = [(boxes[i].copy(), float(scores[i])) for i in keep]
+    return merged, orig_w, orig_h
+
+
+def merged_boxes_to_yolo_txt(merged_pairs, orig_w, orig_h):
+    """YOLO normalized lines (class 0) for full image size orig_w x orig_h."""
+    lines = []
+    ow, oh = float(orig_w), float(orig_h)
+    for b, _s in merged_pairs:
+        x1, y1, x2, y2 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+        cx = ((x1 + x2) / 2) / ow
+        cy = ((y1 + y2) / 2) / oh
+        nw = (x2 - x1) / ow
+        nh = (y2 - y1) / oh
+        lines.append(f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
+    return "\n".join(lines)
+
+
 # ==================== Image to Base64 ====================
 def image_to_base64(image):
     _, buffer = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 90])
@@ -178,11 +247,8 @@ def detect_single_image(image_bytes, draw_boxes=True):
         if img is None:
             return None, "Failed to read image"
 
-        input_img, scale, pad_w, pad_h, orig_w, orig_h = preprocess_image(img)
-
         if model_session:
-            outputs = model_session.run(output_names, {input_name: input_img})
-            boxes = postprocess_output(outputs, scale, pad_w, pad_h, orig_w, orig_h)
+            boxes = run_inference_on_bgr(img)
 
             if draw_boxes:
                 for box in boxes:
@@ -328,6 +394,162 @@ def detect_batch():
     })
 
 
+# ==================== Pipeline A / B (大图滑窗 → 合并 + 全局 NMS) ====================
+@app.route('/a')
+def page_a():
+    return render_template('page_a.html')
+
+
+@app.route('/b')
+def page_b():
+    return render_template('page_b.html')
+
+
+@app.route('/api/pipeline_a', methods=['POST'])
+def api_pipeline_a():
+    """上传大图 → 1280 滑窗 → 每块 ONNX；返回 JSON 供 pipeline_b。"""
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image uploaded'}), 400
+    file = request.files['image']
+    if not file.filename:
+        return jsonify({'error': 'Empty filename'}), 400
+
+    try:
+        overlap = int(request.form.get('overlap', 200))
+    except ValueError:
+        overlap = 200
+    overlap = max(0, min(overlap, IMG_SIZE - 1))
+
+    try:
+        nparr = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            return jsonify({'error': 'Failed to decode image'}), 400
+
+        H, W = img.shape[:2]
+        stride = max(1, IMG_SIZE - overlap)
+        tiles_out = []
+        sum_raw = 0
+        idx = 0
+
+        for x0, y0, tile in iter_sliding_tiles(img, IMG_SIZE, overlap):
+            persons = run_inference_on_bgr(tile)
+            th, tw = tile.shape[:2]
+            sum_raw += len(persons)
+            tiles_out.append({
+                'index': idx,
+                'x0': x0,
+                'y0': y0,
+                'w': tw,
+                'h': th,
+                'persons': persons,
+                'count': len(persons),
+            })
+            idx += 1
+
+        return jsonify({
+            'orig_w': W,
+            'orig_h': H,
+            'tile_size': IMG_SIZE,
+            'overlap': overlap,
+            'stride': stride,
+            'tiles': tiles_out,
+            'sum_raw': sum_raw,
+        })
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/pipeline_b', methods=['POST'])
+def api_pipeline_b():
+    """接收 pipeline_a 的 JSON → 坐标还原 → 全局 NMS → yolo_txt / 人数 / CSV；可选同一张大图画框。"""
+    merge_iou = GLOBAL_MERGE_IOU
+    image_bytes = None
+    data = None
+
+    if request.is_json:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({'error': 'Invalid or empty JSON'}), 400
+        merge_iou = float(data.get('merge_iou', GLOBAL_MERGE_IOU))
+        b64 = data.get('image_base64')
+        if b64:
+            s = b64.split(',', 1)[-1] if isinstance(b64, str) else ''
+            try:
+                image_bytes = base64.b64decode(s)
+            except Exception:
+                return jsonify({'error': 'Invalid image_base64'}), 400
+    else:
+        raw = request.form.get('payload')
+        if not raw:
+            return jsonify({'error': 'Missing form field payload (JSON string)'}), 400
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            return jsonify({'error': f'Invalid JSON in payload: {e}'}), 400
+        try:
+            merge_iou = float(request.form.get('merge_iou', GLOBAL_MERGE_IOU))
+        except ValueError:
+            merge_iou = GLOBAL_MERGE_IOU
+        if 'image' in request.files and request.files['image'].filename:
+            image_bytes = request.files['image'].read()
+
+    if not isinstance(data, dict) or 'tiles' not in data:
+        return jsonify({'error': 'Payload must be an object with key tiles'}), 400
+
+    try:
+        merged, ow, oh = merge_tiles_global_nms(data, merge_iou)
+        yolo_txt = merged_boxes_to_yolo_txt(merged, ow, oh)
+        count = len(merged)
+
+        out = {
+            'count': count,
+            'merged_count': count,
+            'sum_raw_hint': data.get('sum_raw'),
+            'yolo_txt': yolo_txt,
+            'merge_iou': merge_iou,
+            'orig_w': ow,
+            'orig_h': oh,
+        }
+
+        df = pd.DataFrame([{
+            'total_persons': count,
+            'orig_w': ow,
+            'orig_h': oh,
+            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }])
+        csv_buf = io.StringIO()
+        df.to_csv(csv_buf, index=False)
+        out['csv_base64'] = base64.b64encode(
+            csv_buf.getvalue().encode('utf-8')
+        ).decode('utf-8')
+
+        if image_bytes:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            vis = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if vis is None:
+                out['image_error'] = 'Could not decode image for visualization'
+            else:
+                ih, iw = vis.shape[:2]
+                for b, sc in merged:
+                    x1 = int(np.clip(b[0], 0, iw - 1))
+                    y1 = int(np.clip(b[1], 0, ih - 1))
+                    x2 = int(np.clip(b[2], 0, iw - 1))
+                    y2 = int(np.clip(b[3], 0, ih - 1))
+                    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(
+                        vis, f'{sc:.2f}', (x1, max(0, y1 - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
+                    )
+                out['image_data'] = image_to_base64(vis)
+
+        return jsonify(out)
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== Auto Open Browser ====================
 def open_browser():
     webbrowser.open(f"http://localhost:{PORT}")
@@ -339,6 +561,8 @@ if __name__ == '__main__':
     print("  Person Detection Server (Windows)")
     print(f"  Model:  {MODEL_PATH}")
     print(f"  URL:    http://localhost:{PORT}")
+    print(f"  Page A: http://localhost:{PORT}/a")
+    print(f"  Page B: http://localhost:{PORT}/b")
     print("=" * 50)
 
     # Auto open browser after 1.5s

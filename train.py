@@ -7,7 +7,7 @@ Each experiment: change hyperparams/model/augmentation here, then run:
 After training, this script calls evaluate_model() and prints structured
 metrics for the autoresearch loop to parse via grep.
 
-DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
+DO NOT modify: evaluate.py (defines CDS including latency), deployment thresholds, quality gates.
 """
 
 import os

@@ -1,1 +1,1 @@
-commit	cds	mAP50	mAP50_95	small_obj_recall	precision	recall	counting_mae	inference_ms	memory_gb	epochs	status	description
+commit	cds	mAP50	mAP50_95	small_obj_recall	precision	recall	counting_mae	inference_ms	latency_score	memory_gb	epochs	status	description

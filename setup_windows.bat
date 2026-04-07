@@ -61,4 +61,8 @@ echo To start the autonomous experiment loop:
 echo   1. Start Ollama in another terminal: ollama serve
 echo   2. Run: python ollama_runner.py
 echo.
+echo Optional — client latency cap for TARGET_MET (single 1280 tile, mean ms):
+echo   set AUTORESEARCH_LATENCY_GATE_MS=90
+echo   Omit to use default in evaluate.py; run.log prints latency_gate_ms.
+echo.
 pause
