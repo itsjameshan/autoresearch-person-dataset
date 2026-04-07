@@ -9,6 +9,9 @@ Usage:
   2. Pull a model: ollama pull qwen2.5-coder:14b
      Optional: set AUTORESEARCH_OLLAMA_MODEL to any name from `ollama list` (e.g. gemma3:4b).
   3. Run: python ollama_runner.py
+     全程无交互，直到：达标连击 / 连续 discard 平台期 / 满 MAX_EXPERIMENTS / 你 Ctrl+C。
+     若 Git push 弹窗打断：先配置凭据，或 PowerShell 临时跳过远程同步：
+       $env:AUTORESEARCH_SKIP_PUSH="1"; python ollama_runner.py
 
 The runner reads program.md, runs baseline, then autonomously loops:
   modify train.py → commit → train → evaluate → keep/discard → repeat
@@ -182,6 +185,12 @@ def git_commit_results(message):
 
 
 def git_push():
+    """远程 push；设 AUTORESEARCH_SKIP_PUSH=1 可跳过（避免无人值守时弹 Git 凭据窗）。"""
+    if os.environ.get("AUTORESEARCH_SKIP_PUSH", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        print("  （已跳过 git push：AUTORESEARCH_SKIP_PUSH 已设置，结束后再手动 push）")
+        return 0, "", ""
     return git("push", "origin", BRANCH)
 
 

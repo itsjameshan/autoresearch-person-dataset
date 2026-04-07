@@ -19,12 +19,16 @@ import pandas as pd
 
 warnings.filterwarnings('ignore')
 
-app = Flask(__name__, static_folder='static', static_url_path='/static')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 同上：勿依赖 cwd，否则从别的目录 python person_dataset/app_win.py 会 404
+app = Flask(
+    __name__,
+    static_folder=os.path.join(BASE_DIR, "static"),
+    static_url_path="/static",
+)
 CORS(app)
 app.config['SECRET_KEY'] = 'person_detect'
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ROOT_DIR = os.path.join(BASE_DIR, "onnx_data")
 SAVE_ROOT_DIR = os.path.join(BASE_DIR, "result")
 
@@ -36,7 +40,7 @@ input_name = None
 output_names = None
 current_model_name = "未加载"
 IMG_SIZE = 1280
-PORT = 5000
+PORT = int(os.environ.get("APP_WIN_PORT", "5050"))
 GLOBAL_MERGE_IOU = 0.35
 
 model_lock = threading.Lock()
@@ -286,13 +290,16 @@ def detect_img_bytes(img_bytes, conf=0.5, iou=0.5):
     }, None
 
 
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
+
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
+    return send_from_directory(STATIC_DIR, "index.html")
 
 @app.route('/static/<path:filename>')
 def static_files(filename):
-    return send_from_directory('static', filename)
+    return send_from_directory(STATIC_DIR, filename)
 
 
 @app.route('/api/config', methods=['GET'])
@@ -491,12 +498,12 @@ def health():
 
 @app.route('/a')
 def pipeline_page_a():
-    return send_from_directory('static', 'page_a.html')
+    return send_from_directory(STATIC_DIR, "page_a.html")
 
 
 @app.route('/b')
 def pipeline_page_b():
-    return send_from_directory('static', 'page_b.html')
+    return send_from_directory(STATIC_DIR, "page_b.html")
 
 
 @app.route('/api/pipeline_a', methods=['POST'])
@@ -654,7 +661,7 @@ def api_pipeline_b():
 
 def open_browser():
     time.sleep(1.5)
-    webbrowser.open(f"http://localhost:{PORT}")
+    webbrowser.open(f"http://127.0.0.1:{PORT}/")
 
 
 if __name__ == '__main__':
@@ -663,8 +670,10 @@ if __name__ == '__main__':
     print(f"  模型目录：{MODEL_ROOT_DIR}")
     print(f"  保存目录：{SAVE_ROOT_DIR}")
     print(f"  当前模型：{current_model_name}")
-    print(f"  网页 A（滑窗）: http://localhost:{PORT}/a")
-    print(f"  网页 B（拼接）: http://localhost:{PORT}/b")
+    print(f"  主页: http://127.0.0.1:{PORT}/")
+    print(f"  网页 A（滑窗）: http://127.0.0.1:{PORT}/a")
+    print(f"  网页 B（拼接）: http://127.0.0.1:{PORT}/b")
+    print("  (默认端口 5050，避免与占用 5000 的其它服务冲突；可设 APP_WIN_PORT)")
     print("=" * 60)
 
     if model_session is None:
