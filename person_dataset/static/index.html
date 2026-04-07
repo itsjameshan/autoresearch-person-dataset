@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>体育场密集人群检测</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="/static/css/style.css?v=20240520005">
+
+    <style>
+        .modal-overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5);
+            display: none; align-items:center; justify-content: center; z-index: 9999;
+        }
+        .modal-box {
+            background:white; padding:25px 30px; border-radius:12px; width:420px;
+            box-shadow:0 8px 30px rgba(0,0,0,0.3);
+        }
+        .modal-box h3 { margin-bottom:18px; font-size:16px; }
+        .model-option {
+            padding:12px 15px; background:#f5f7fa; border-radius:8px; margin-bottom:10px;
+            cursor: pointer; font-size:14px;
+        }
+        .model-option:hover { background:#e9edf2; }
+        .folder-input-hide { position:absolute; width:0; height:0; opacity:0; overflow:hidden; }
+        .loading-overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.3);
+            display: none; align-items:center; justify-content:center; z-index:10000;
+            color:white; font-size:18px;
+        }
+
+        /* 表格样式增强 */
+        .result-table table tbody tr {
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        .result-table table tbody tr:hover {
+            background-color: #f0f0f0; /* 悬停灰色 */
+        }
+        .result-table table tbody tr.active {
+            background-color: #e3f2fd; /* 选中蓝色高亮 */
+        }
+
+        /* 检测框脉动动画 */
+        @keyframes pulse {
+            0% {
+                stroke-width: 3;
+                opacity: 1;
+            }
+            50% {
+                stroke-width: 5;
+                opacity: 0.7;
+            }
+            100% {
+                stroke-width: 3;
+                opacity: 1;
+            }
+        }
+
+        /* 新增：文件夹检测进度条 */
+        .folder-progress-bar {
+            height: 10px;
+            background: #eee;
+            border-radius: 5px;
+            margin: 12px 0;
+            overflow: hidden;
+            display: none;
+        }
+        .folder-progress {
+            height: 100%;
+            background: #0096ff;
+            width: 0%;
+            transition: width 0.2s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>体育场人群检测</h2>
+            </div>
+            <div class="sidebar-links">
+                <a href="/a" target="_blank">网页 A：大图滑窗</a>
+                <a href="/b" target="_blank">网页 B：拼接 NMS</a>
+            </div>
+            <button class="sidebar-btn active" id="btn-img">
+                <span class="icon">🖼️</span>图片选择
+            </button>
+            <button class="sidebar-btn" id="btn-folder">
+                <span class="icon">📁</span>文件夹选择
+            </button>
+            <button class="sidebar-btn" id="btn-model">
+                <span class="icon">🚌</span>模型选择
+            </button>
+            <button class="sidebar-btn" id="btn-save">
+                <span class="icon">💾</span>结果保存
+            </button>
+        </aside>
+
+        <section class="image-view">
+            <div class="top-bar">
+                <div class="param-bar">
+                    <div class="param-item">
+                        <label>置信度 (Conf): <span id="conf-value">0.5</span></label>
+                        <input type="range" id="conf-slider" min="0" max="1" step="0.01" value="0.5">
+                    </div>
+                    <div class="param-item">
+                        <label>交并比 (IoU): <span id="iou-value">0.5</span></label>
+                        <input type="range" id="iou-slider" min="0" max="1" step="0.01" value="0.5">
+                    </div>
+                </div>
+                <div class="status-bar">
+                    <div class="status-item">
+                        <span class="icon">⏱️</span>检测耗时: <span id="time-cost">0.00s</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="icon">🎯</span>检测目标: <span id="target-count">0个</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 新增：文件夹检测进度条 -->
+            <div class="folder-progress-bar" id="folderProgressBar">
+                <div class="folder-progress" id="folderProgress"></div>
+            </div>
+
+            <div class="image-container" id="img-container">
+                <div class="image-stack" id="image-stack">
+                    <img id="detect-img" src="" alt="请选择图片/文件夹进行检测">
+                    <canvas id="canvas-overlay"></canvas>
+                </div>
+                <div class="empty-tip" id="empty-tip">请选择图片/文件夹进行检测</div>
+            </div>
+        </section>
+
+        <section class="right-panel">
+            <div class="result-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>序号</th>
+                            <th>图片名称</th>
+                            <th>类别</th>
+                            <th>置信度</th>
+                            <th>坐标位置</th>
+                        </tr>
+                    </thead>
+                    <tbody id="result-tbody"></tbody>
+                </table>
+            </div>
+
+            <aside class="info-panel">
+                <div class="info-card stats-card">
+                    <h4>📊 类别统计</h4>
+                    <div class="stats-content" id="stats-content"></div>
+                </div>
+
+                <div class="info-card conf-card">
+                    <h4>🔍 置信度:</h4>
+                    <input type="text" id="conf-input" value="" readonly>
+                </div>
+                <div class="info-card coord-card">
+                    <h4>📍 坐标位置:</h4>
+                    <div class="coord-inputs">
+                        <div class="coord-row">
+                            <label>X₁</label>
+                            <input type="text" id="coord-x1" value="0" readonly>
+                            <label>Y₁</label>
+                            <input type="text" id="coord-y1" value="0" readonly>
+                        </div>
+                        <div class="coord-row">
+                            <label>X₂</label>
+                            <input type="text" id="coord-x2" value="0" readonly>
+                            <label>Y₂</label>
+                            <input type="text" id="coord-y2" value="0" readonly>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="start-detect" class="start-detect-btn">开始检测</button>
+            </aside>
+        </section>
+    </div>
+
+    <input type="file" id="img-selector" class="folder-input-hide" accept="image/jpeg,image/png,image/jpg,image/bmp">
+    <input type="file" id="folder-selector" class="folder-input-hide" webkitdirectory directory multiple>
+
+    <div class="modal-overlay" id="modelModal">
+        <div class="modal-box">
+            <h3>选择检测模型</h3>
+            <div id="model-list"></div>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay">
+        <div>检测中，请稍候...</div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const confSlider = document.getElementById('conf-slider');
+            const iouSlider = document.getElementById('iou-slider');
+            const targetCountEl = document.getElementById('target-count');
+            const tbody = document.getElementById('result-tbody');
+            const confInput = document.getElementById('conf-input');
+            const coordX1 = document.getElementById('coord-x1');
+            const coordY1 = document.getElementById('coord-y1');
+            const coordX2 = document.getElementById('coord-x2');
+            const coordY2 = document.getElementById('coord-y2');
+            const folderSelector = document.getElementById('folder-selector');
+            const imgSelector = document.getElementById('img-selector');
+            const detectImg = document.getElementById('detect-img');
+            const emptyTip = document.getElementById('empty-tip');
+            const startDetectBtn = document.getElementById('start-detect');
+            const btnImg = document.getElementById('btn-img');
+            const btnFolder = document.getElementById('btn-folder');
+            const btnModel = document.getElementById('btn-model');
+            const btnSave = document.getElementById('btn-save');
+            const canvas = document.getElementById('canvas-overlay');
+            const ctx = canvas.getContext('2d');
+
+            // 新增：进度条元素
+            const folderProgressBar = document.getElementById('folderProgressBar');
+            const folderProgress = document.getElementById('folderProgress');
+
+            let currentImageFile = null;
+            let selectedFolderPath = null;
+            let currentPersons = [];
+            let selectedIndex = -1;
+            let imageFileName = "";
+            let folderResults = []; // 保存文件夹所有结果
+
+            function resizeCanvas() {
+                if (!detectImg.src) return;
+                setTimeout(() => {
+                    canvas.width = detectImg.offsetWidth;
+                    canvas.height = detectImg.offsetHeight;
+                    drawBoxes();
+                }, 100);
+            }
+
+            // 绘制检测框（已修复：普通框绿色，选中橙色）
+            function drawBoxes() {
+                if (!currentPersons || currentPersons.length === 0) return;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                const imgW = detectImg.naturalWidth;
+                const imgH = detectImg.naturalHeight;
+                const viewW = canvas.width;
+                const viewH = canvas.height;
+                const scale = Math.min(viewW / imgW, viewH / imgH);
+
+                // 普通框：绿色
+                currentPersons.forEach((p, idx) => {
+                    const x = p.x1 * scale;
+                    const y = p.y1 * scale;
+                    const w = (p.x2 - p.x1) * scale;
+                    const h = (p.y2 - p.y1) * scale;
+
+                    if (idx !== selectedIndex) {
+                        ctx.strokeStyle = '#00ff00';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(x, y, w, h);
+                    }
+                });
+
+                // 高亮框：橙色
+                if (selectedIndex >= 0 && selectedIndex < currentPersons.length) {
+                    const p = currentPersons[selectedIndex];
+                    const x = p.x1 * scale;
+                    const y = p.y1 * scale;
+                    const w = (p.x2 - p.x1) * scale;
+                    const h = (p.y2 - p.y1) * scale;
+
+                    ctx.strokeStyle = '#ff0000'; // 纯红色
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(x, y, w, h);
+                }
+            }
+
+            function resetInfoPanel() {
+                confInput.value = '';
+                coordX1.value = 0;
+                coordY1.value = 0;
+                coordX2.value = 0;
+                coordY2.value = 0;
+                selectedIndex = -1;
+                drawBoxes();
+            }
+
+            function clearResults() {
+                tbody.innerHTML = '';
+                targetCountEl.textContent = '0个';
+                document.getElementById('time-cost').textContent = '0.00s';
+                currentPersons = [];
+                window.allPersons = [];
+                resetInfoPanel();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+
+            btnImg.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                resetInfoPanel();
+                imgSelector.value = '';
+                imgSelector.click();
+            });
+
+            imgSelector.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                currentImageFile = file;
+                imageFileName = file.name;
+                const url = URL.createObjectURL(file);
+                detectImg.src = url;
+                detectImg.style.visibility = 'visible';
+                emptyTip.style.display = 'none';
+                resizeCanvas();
+                clearResults();
+            });
+
+            startDetectBtn.addEventListener('click', async function() {
+                if (!currentImageFile) {
+                    alert('请先选择图片！');
+                    return;
+                }
+                loadingOverlay.style.display = 'flex';
+
+                const formData = new FormData();
+                formData.append('image', currentImageFile);
+                formData.append('conf', confSlider.value);
+                formData.append('iou', iouSlider.value);
+
+                try {
+                    const res = await fetch('/detect_single', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await res.json();
+                    if (data.error) {
+                        alert('检测失败：' + data.error);
+                        loadingOverlay.style.display = 'none';
+                        return;
+                    }
+                    if (data.image_data) {
+                        detectImg.src = data.image_data;
+                    }
+                    targetCountEl.textContent = data.count + '个';
+                    document.getElementById('time-cost').textContent = data.infer_time + 's';
+                    currentPersons = data.persons || [];
+                    window.allPersons = data.persons;
+
+                    tbody.innerHTML = '';
+                    if (currentPersons.length > 0) {
+                        currentPersons.forEach((p, i) => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `
+                                <td>${i+1}</td>
+                                <td>${imageFileName}</td>
+                                <td>person</td>
+                                <td>${p.conf.toFixed(2)}</td>
+                                <td>${p.x1},${p.y1},${p.x2},${p.y2}</td>
+                            `;
+                            tr.onclick = () => {
+                                document.querySelectorAll('tbody tr').forEach(row => row.classList.remove('active'));
+                                tr.classList.add('active');
+                                selectedIndex = i;
+                                confInput.value = p.conf.toFixed(3);
+                                coordX1.value = p.x1;
+                                coordY1.value = p.y1;
+                                coordX2.value = p.x2;
+                                coordY2.value = p.y2;
+                                drawBoxes();
+                            };
+                            tbody.appendChild(tr);
+                        });
+                        document.getElementById('stats-content').innerHTML = `<p>检测到 ${data.count} 个人</p>`;
+                    } else {
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">未检测到目标</td></tr>';
+                        document.getElementById('stats-content').innerHTML = '<p>未检测到目标</p>';
+                    }
+                    resizeCanvas();
+                } catch (e) {
+                    console.error('检测异常:', e);
+                    alert('检测异常');
+                } finally {
+                    loadingOverlay.style.display = 'none';
+                }
+            });
+
+            btnFolder.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                resetInfoPanel();
+                folderSelector.value = '';
+                folderSelector.click();
+            });
+
+            // ====================== ✅ 已升级：文件夹检测（看图 + 进度条） ======================
+            folderSelector.addEventListener('change', function(e) {
+                const files = e.target.files;
+                if (files.length === 0) return;
+                const firstFilePath = files[0].webkitRelativePath;
+                const folderName = firstFilePath.split('/')[0];
+                selectedFolderPath = `D:/pythonProject/person_dataset/images/${folderName}`;
+
+                if (confirm(`是否检测 ${folderName} 内的 ${files.length} 张图片？`)) {
+                    loadingOverlay.style.display = 'flex';
+                    folderProgressBar.style.display = 'block';
+                    folderProgress.style.width = '0%';
+                    tbody.innerHTML = '';
+
+                    fetch('/detect_folder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            folder_path: selectedFolderPath,
+                            conf: parseFloat(confSlider.value),
+                            iou: parseFloat(iouSlider.value)
+                        })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        loadingOverlay.style.display = 'none';
+                        folderProgressBar.style.display = 'none';
+                        if (data.error) { alert(data.error); return; }
+
+                        folderResults = data.results;
+                        targetCountEl.textContent = data.total_count + '个';
+                        tbody.innerHTML = '';
+
+                        data.results.forEach((item, idx) => {
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `
+                                <td>${idx+1}</td>
+                                <td>${item.name}</td>
+                                <td>person</td>
+                                <td>-</td>
+                                <td>总数：${item.count}</td>
+                            `;
+                            tr.onclick = () => {
+                                document.querySelectorAll('tbody tr').forEach(r => r.classList.remove('active'));
+                                tr.classList.add('active');
+                                detectImg.src = item.image_data;
+                                currentPersons = item.persons;
+                                window.allPersons = item.persons;
+                                detectImg.style.visibility = 'visible';
+                                emptyTip.style.display = 'none';
+                                setTimeout(resizeCanvas, 100);
+                            };
+                            tbody.appendChild(tr);
+                        });
+                        alert(`检测完成！共 ${data.total} 张，总人数 ${data.total_count}`);
+                    })
+                    .catch(err => {
+                        loadingOverlay.style.display = 'none';
+                        folderProgressBar.style.display = 'none';
+                        alert('文件夹检测失败');
+                    });
+                }
+            });
+
+            btnSave.addEventListener('click', async () => {
+                const persons = window.allPersons || [];
+                if (persons.length === 0) {
+                    alert('暂无检测结果，无法保存！');
+                    return;
+                }
+                try {
+                    loadingOverlay.style.display = 'flex';
+                    const res = await fetch('/save_results', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            persons: persons,
+                            image_base64: detectImg.src
+                        })
+                    });
+                    const data = await res.json();
+                    loadingOverlay.style.display = 'none';
+                    alert(data.success ? '✅ 保存成功！' : '❌ 保存失败');
+                } catch (err) {
+                    loadingOverlay.style.display = 'none';
+                    alert('保存异常');
+                }
+            });
+
+            const modelModal = document.getElementById('modelModal');
+            const modelList = document.getElementById('model-list');
+
+            btnModel.onclick = async () => {
+                const res = await fetch('/get_models');
+                const data = await res.json();
+                modelList.innerHTML = '';
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(m => {
+                        const div = document.createElement('div');
+                        div.className = 'model-option';
+                        div.textContent = m.name;
+                        div.onclick = async () => {
+                            await fetch('/switch_model', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ model_name: m.name })
+                            });
+                            alert('模型已切换');
+                            modelModal.style.display = 'none';
+                        };
+                        modelList.appendChild(div);
+                    });
+                } else {
+                    modelList.innerHTML = '<div style="padding:10px;text-align:center;">暂无可用模型</div>';
+                }
+                modelModal.style.display = 'flex';
+            };
+
+            modelModal.onclick = e => {
+                if (e.target === modelModal) modelModal.style.display = 'none';
+            };
+
+            document.getElementById('conf-value').textContent = confSlider.value;
+            document.getElementById('iou-value').textContent = iouSlider.value;
+            confSlider.oninput = () => {
+                document.getElementById('conf-value').textContent = confSlider.value;
+            };
+            iouSlider.oninput = () => {
+                document.getElementById('iou-value').textContent = iouSlider.value;
+            };
+
+            detectImg.onload = resizeCanvas;
+            window.onresize = resizeCanvas;
+
+            console.log('页面初始化完成');
+        });
+    </script>
+</body>
+</html>

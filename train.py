@@ -33,7 +33,7 @@ from evaluate import evaluate_model, print_metrics
 MODEL = "yolov8s.pt"
 
 # Dataset
-DATA_YAML = "person.yaml"
+DATA_YAML = "person_dataset/person.yaml"
 IMGSZ = 1280
 
 # Training — RTX 5070 12GB VRAM, 64GB RAM

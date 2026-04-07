@@ -133,7 +133,7 @@ autoresearch-person-dataset/
 ├── requirements.txt      # [Windows] Python 依赖
 ├── data_quality.py       # 标注质量检查工具（独立于循环）
 ├── build_pipeline_val.py # 大图拼接工具（从 tiles 重建原始大图）
-├── person.yaml           # 数据集配置
+├── person_dataset/       # 协同：标注工具、Flask、person.yaml、static/
 ├── results.tsv           # 实验日志（每次 keep/discard 记录）
 ├── status.md             # 实时进度面板（Agent 每轮更新）
 ├── suggestions.md        # 顾问建议文件（Codex/Ollama 写入）

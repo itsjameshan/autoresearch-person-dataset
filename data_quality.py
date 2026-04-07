@@ -3,7 +3,7 @@ data_quality.py — Annotation quality checker.
 Independent from the autoresearch loop. Run manually after dataset updates.
 
 Usage:
-  python data_quality.py --data person.yaml --model autoresearch_runs/current/weights/best.pt
+  python data_quality.py --data person_dataset/person.yaml --model autoresearch_runs/current/weights/best.pt
 """
 
 import os
@@ -189,7 +189,7 @@ def run_quality_check(data_yaml, model_path=None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="person.yaml")
+    parser.add_argument("--data", default="person_dataset/person.yaml")
     parser.add_argument("--model", default=None, help="Trained model for missing label detection")
     args = parser.parse_args()
     run_quality_check(args.data, args.model)

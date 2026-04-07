@@ -467,7 +467,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Path to .pt model")
-    parser.add_argument("--data", default="person.yaml", help="Dataset YAML")
+    parser.add_argument("--data", default="person_dataset/person.yaml", help="Dataset YAML")
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--pipeline-dir", default=None, help="Large images dir for pipeline eval")
     args = parser.parse_args()
