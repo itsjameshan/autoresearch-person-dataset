@@ -26,7 +26,7 @@ app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_ROOT_DIR = os.path.join(BASE_DIR, "onnx_data")
-SAVE_ROOT_DIR = r"D:\pythonProject\person_dataset\result"
+SAVE_ROOT_DIR = os.path.join(BASE_DIR, "result")
 
 os.makedirs(MODEL_ROOT_DIR, exist_ok=True)
 os.makedirs(SAVE_ROOT_DIR, exist_ok=True)
@@ -293,6 +293,14 @@ def index():
 @app.route('/static/<path:filename>')
 def static_files(filename):
     return send_from_directory('static', filename)
+
+
+@app.route('/api/config', methods=['GET'])
+def api_config():
+    """供前端拼出本机 images 子目录绝对路径（随仓库位置迁移，勿写死盘符）。"""
+    root = os.path.join(BASE_DIR, "images")
+    return jsonify({"images_root": root.replace("\\", "/")})
+
 
 @app.route('/get_models')
 def get_models():

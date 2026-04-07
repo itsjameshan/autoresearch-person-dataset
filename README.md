@@ -182,7 +182,7 @@ python ollama_runner.py
 - **原始大图**：5120×3840（3×4 网格裁切而来）
 - **Pipeline 验证集**：8 张拼接大图，共 1560 个 GT 标注框
 
-> 注意：images/ 和 labels/ 目录（~1.8GB）不在 git 中。Windows 机器需要数据集在 `D:\PythonProject\person_dataset\`。
+> 注意：images/ 和 labels/（~1.8GB）不进 git。请放在仓库内 **`person_dataset/`** 下（与 `person_dataset/person.yaml` 的 `path: .` 一致），勿再使用单独的 `D:\autoresearch\person_dataset`。
 
 ## 灵感来源
 

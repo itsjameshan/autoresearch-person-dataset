@@ -401,12 +401,19 @@
             });
 
             // ====================== ✅ 已升级：文件夹检测（看图 + 进度条） ======================
-            folderSelector.addEventListener('change', function(e) {
+            folderSelector.addEventListener('change', async function(e) {
                 const files = e.target.files;
                 if (files.length === 0) return;
                 const firstFilePath = files[0].webkitRelativePath;
-                const folderName = firstFilePath.split('/')[0];
-                selectedFolderPath = `D:/pythonProject/person_dataset/images/${folderName}`;
+                const folderName = firstFilePath.includes('/') ? firstFilePath.split('/')[0] : 'train';
+                let cfg;
+                try {
+                    cfg = await fetch('/api/config').then(r => r.json());
+                } catch (err) {
+                    alert('无法获取服务器数据目录');
+                    return;
+                }
+                selectedFolderPath = `${cfg.images_root}/${folderName}`;
 
                 if (confirm(`是否检测 ${folderName} 内的 ${files.length} 张图片？`)) {
                     loadingOverlay.style.display = 'flex';

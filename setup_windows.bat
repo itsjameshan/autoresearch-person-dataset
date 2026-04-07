@@ -41,13 +41,14 @@ if errorlevel 1 (
     ollama pull qwen2.5-coder:14b
 )
 
-REM Check dataset
-if exist "D:\PythonProject\person_dataset\images\train" (
-    echo Dataset found at D:\PythonProject\person_dataset
+REM Check dataset (repo: person_dataset\images\train)
+set "REPO_ROOT=%~dp0"
+if exist "%REPO_ROOT%person_dataset\images\train" (
+    echo Dataset found at %REPO_ROOT%person_dataset
 ) else (
     echo.
-    echo WARNING: Dataset not found at D:\PythonProject\person_dataset
-    echo Make sure images/ and labels/ directories exist there.
+    echo WARNING: Dataset not found at %REPO_ROOT%person_dataset\images\train
+    echo Put images/ and labels/ under the repo folder person_dataset\
     echo.
 )
 

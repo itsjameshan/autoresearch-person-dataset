@@ -1,4 +1,4 @@
-# 数据集根目录即本文件所在目录（person_dataset/）。images/、labels/ 留在本机，勿提交 Git。
+# 数据集根目录 = 本文件所在目录（仓库内 person_dataset/）。大文件见仓库根 .gitignore，勿 commit。
 path: .
 train: images/train
 val: images/val

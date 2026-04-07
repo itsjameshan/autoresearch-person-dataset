@@ -1,8 +1,9 @@
 import os
 
-# -------------------------- 配置路径 --------------------------
-IMAGE_DIR = r"D:\pythonProject\person_dataset\images\train"
-LABEL_DIR = r"D:\pythonProject\person_dataset\labels\train"
+_REPO = os.path.dirname(os.path.abspath(__file__))
+_DATA = os.path.join(_REPO, "person_dataset")
+IMAGE_DIR = os.path.join(_DATA, "images", "train")
+LABEL_DIR = os.path.join(_DATA, "labels", "train")
 # 支持的图片后缀（可根据需要添加）
 IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp')
 # -----------------------------------------------------------

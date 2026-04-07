@@ -19,9 +19,9 @@ git checkout autoresearch/crowd-win
 # 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. 将 YOLO 数据集放到 person_dataset/（与 person_dataset/person.yaml 中 path: . 一致）：
+# 3. 唯一数据根目录：仓库内 person_dataset/（勿再维护单独的 D:\autoresearch\person_dataset）。
 #    person_dataset/images/{train,val,test}/ 与 person_dataset/labels/...
-#    大文件已被 .gitignore 排除，需本机拷贝或网盘同步，勿 push。
+#    大文件已被 .gitignore 排除，勿 commit/push。
 
 # 4. Start Ollama
 ollama serve

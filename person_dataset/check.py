@@ -1,8 +1,8 @@
 import os
 
-# 配置路径
-VAL_IMG_DIR = r"D:\PythonProject\person_dataset\image\val"
-VAL_LABEL_DIR = r"D:\PythonProject\person_dataset\labels\val"
+_BASE = os.path.dirname(os.path.abspath(__file__))
+VAL_IMG_DIR = os.path.join(_BASE, "images", "val")
+VAL_LABEL_DIR = os.path.join(_BASE, "labels", "val")
 
 # 支持的图片后缀
 IMG_SUFFIXES = ('.jpg', '.jpeg', '.png', '.bmp')

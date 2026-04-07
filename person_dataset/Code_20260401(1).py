@@ -1,5 +1,8 @@
+import os
 from ultralytics import YOLO
 import numpy as np
+
+_BASE = os.path.dirname(os.path.abspath(__file__))
 
 # --------------------------
 # 配置（适合密集人群）
@@ -7,7 +10,7 @@ import numpy as np
 MODEL = "yolo12l.pt"  # 大模型，适合密集人群
 CONF = 0.25           # 置信度阈值（低一点，能检测更多人）
 IOU = 0.20            # IoU阈值（非常低，避免重叠人群合并）
-IMAGE_PATH = r"D:\pythonProject\person_dataset\images\train\DSC01523_0_0.JPG"  # 你的照片路径
+IMAGE_PATH = os.path.join(_BASE, "images", "train", "DSC01523_0_0.JPG")  # 按需改文件名
 
 # 加载模型
 model = YOLO(MODEL)
