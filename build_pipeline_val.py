@@ -19,6 +19,11 @@ OUTPUT_DIR = "pipeline_val"
 NUM_IMAGES = 8  # how many large images to build
 
 
+def _count_lines(path):
+    with open(path) as f:
+        return sum(1 for _ in f)
+
+
 def find_complete_grids(image_dirs, label_dirs):
     """Find base images where all tiles exist (across train+val) with labels."""
     tile_map = defaultdict(dict)  # base -> {(row,col): (img_path, label_path)}
@@ -51,7 +56,7 @@ def find_complete_grids(image_dirs, label_dirs):
         expected = (max_row + 1) * (max_col + 1)
         if len(tiles) == expected and expected >= 6:
             total_labels = sum(
-                len(open(lp).readlines()) for _, lp in tiles.values()
+                _count_lines(lp) for _, lp in tiles.values()
             )
             complete[base] = {
                 "tiles": tiles,
@@ -77,10 +82,10 @@ def stitch_image(tiles_info):
     all_labels = []
 
     for (r, c), (img_path, lbl_path) in tiles.items():
-        tile = Image.open(img_path)
-        x_offset = c * TILE_SIZE
-        y_offset = r * TILE_SIZE
-        canvas.paste(tile, (x_offset, y_offset))
+        with Image.open(img_path) as tile:
+            x_offset = c * TILE_SIZE
+            y_offset = r * TILE_SIZE
+            canvas.paste(tile, (x_offset, y_offset))
 
         # Convert YOLO labels to absolute coords on large image
         with open(lbl_path) as f:

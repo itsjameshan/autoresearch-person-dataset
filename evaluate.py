@@ -5,8 +5,10 @@ Computes CDS (Crowd Detection Score) and all metrics for the autoresearch
 keep/discard decision. CDS includes a latency term derived from inference_ms.
 """
 
+import json
 import os
 import sys
+import threading
 import time
 import glob
 import numpy as np
@@ -76,6 +78,53 @@ SMALL_OBJ_AREA_THRESH = 0.005
 WARMUP_IMAGES = 5
 TIMING_IMAGES = 20
 
+# Evaluation watchdog (cross-platform; signal.SIGALRM is unavailable on Windows)
+_EVAL_TIMEOUT_DEFAULT_SEC = 3600.0  # 1 hour, generous upper bound
+METRICS_JSON_PATH = "last_metrics.json"
+
+
+def get_eval_timeout_sec():
+    """Return the evaluation watchdog timeout in seconds.
+
+    Override via env var AUTORESEARCH_EVAL_TIMEOUT_SEC. Invalid values fall
+    back to the default.
+    """
+    raw = os.environ.get("AUTORESEARCH_EVAL_TIMEOUT_SEC", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except ValueError:
+            print(
+                "evaluate: invalid AUTORESEARCH_EVAL_TIMEOUT_SEC, using default",
+                file=sys.stderr,
+            )
+    return _EVAL_TIMEOUT_DEFAULT_SEC
+
+
+def _start_eval_watchdog():
+    """Start a daemon watchdog thread that hard-exits if eval hangs.
+
+    Returns a sentinel dict; set sentinel["done"] = True before normal return
+    so the watchdog skips the kill.
+    """
+    sentinel = {"done": False}
+    timeout = get_eval_timeout_sec()
+
+    def _killer():
+        time.sleep(timeout)
+        if not sentinel["done"]:
+            print(
+                f"evaluate: TIMEOUT after {timeout:.0f}s — forcing exit",
+                file=sys.stderr,
+            )
+            sys.stderr.flush()
+            os._exit(124)
+
+    threading.Thread(target=_killer, daemon=True).start()
+    return sentinel
+
 
 def load_gt_boxes(label_path, img_w=1280, img_h=1280):
     """Load YOLO-format ground truth boxes from a label file.
@@ -141,6 +190,9 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
 
     This is the single source of truth for the autoresearch loop.
     """
+    # ── Watchdog: hard-kill if anything below hangs ──
+    _watchdog = _start_eval_watchdog()
+
     # ── Load model ──
     model = YOLO(model_path)
 
@@ -331,6 +383,16 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         "latency_gate_ms": round(gate_ms, 1),
         "target_met": target_met,
     }
+
+    # ── Persist metrics to JSON for robust downstream parsing ──
+    try:
+        with open(METRICS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+    except OSError as e:
+        print(f"evaluate: failed to write {METRICS_JSON_PATH}: {e}", file=sys.stderr)
+
+    # Disarm watchdog before returning
+    _watchdog["done"] = True
     return metrics
 
 

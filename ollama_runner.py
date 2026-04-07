@@ -51,6 +51,7 @@ MAX_CONSECUTIVE_DISCARDS = 5
 PYTHON = sys.executable      # Use whatever python is running this script
 TRAIN_SCRIPT = "train.py"
 RUN_LOG = "run.log"
+METRICS_JSON = "last_metrics.json"
 RESULTS_TSV = "results.tsv"
 STATUS_MD = "status.md"
 SUGGESTIONS_MD = "suggestions.md"
@@ -285,6 +286,35 @@ def read_file(path):
     return ""
 
 
+_METRIC_KEYS = (
+    "cds", "mAP50", "mAP50_95", "precision", "recall",
+    "f1_optimal", "small_obj_recall", "counting_acc",
+    "counting_mae", "mean_confidence", "inference_ms",
+    "latency_score", "peak_memory_mb", "epochs_completed",
+    "precision_gate", "recall_gate", "latency_gate",
+    "latency_gate_ms",
+)
+
+
+def _load_metrics_json(path=METRICS_JSON):
+    """Load metrics dict from JSON written by evaluate.py.
+
+    Returns dict with all values stringified (for parity with the legacy
+    log-parsing path), or None if the file is missing/corrupt.
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"  （读取 {path} 失败: {e}，回退到 run.log 解析）")
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return {k: str(raw[k]) for k in _METRIC_KEYS if k in raw}
+
+
 def read_train_config():
     """Extract the EXPERIMENT CONFIG section from train.py."""
     content = read_file(TRAIN_SCRIPT)
@@ -345,6 +375,13 @@ def run_training():
     print("  另开终端可看滚动日志:  Get-Content .\\run.log -Wait -Tail 12")
     print("═" * 60 + "\n")
 
+    # Drop any stale metrics JSON from a previous run so we never read old data.
+    if os.path.exists(METRICS_JSON):
+        try:
+            os.remove(METRICS_JSON)
+        except OSError as e:
+            print(f"  （无法删除旧 {METRICS_JSON}: {e}）")
+
     train_start = time.time()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -384,22 +421,19 @@ def run_training():
     success = rc == 0
     duration_sec = time.time() - train_start
 
-    # Parse metrics from run.log
-    metrics = {}
+    # Prefer the metrics JSON written by evaluate.py (robust to log format
+    # changes). Fall back to regex parsing of run.log for legacy/partial runs.
+    metrics = _load_metrics_json() or {}
     log_content = read_file(RUN_LOG)
-    for line in log_content.split("\n"):
-        line = line.strip()
-        if ":" in line and not line.startswith("="):
-            key, _, val = line.partition(":")
-            key = key.strip()
-            val = val.strip()
-            if key in ("cds", "mAP50", "mAP50_95", "precision", "recall",
-                       "f1_optimal", "small_obj_recall", "counting_acc",
-                       "counting_mae", "mean_confidence", "inference_ms",
-                       "latency_score", "peak_memory_mb", "epochs_completed",
-                       "precision_gate", "recall_gate", "latency_gate",
-                       "latency_gate_ms"):
-                metrics[key] = val
+    if not metrics:
+        for line in log_content.split("\n"):
+            line = line.strip()
+            if ":" in line and not line.startswith("="):
+                key, _, val = line.partition(":")
+                key = key.strip()
+                val = val.strip()
+                if key in _METRIC_KEYS:
+                    metrics[key] = val
 
     if "cds" not in metrics and success:
         if "Error" in log_content or "Traceback" in log_content:
