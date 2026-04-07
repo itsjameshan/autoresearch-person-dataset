@@ -19,8 +19,8 @@ git checkout autoresearch/crowd-win
 # 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. Ensure dataset is at D:\PythonProject\person_dataset\
-#    (images/, labels/ directories with YOLO format annotations)
+# 3. Ensure dataset path in person.yaml matches your machine, e.g.:
+#    D:/autoresearch/person_dataset (images/, labels/ in YOLO layout)
 
 # 4. Start Ollama
 ollama serve
@@ -45,13 +45,13 @@ python ollama_runner.py
 
 ## The Goal
 
-**Maximize CDS (Crowd Detection Score)** — composite metric:
+**Maximize CDS (Crowd Detection Score)** — composite metric (see `evaluate.py` for exact constants):
 
 ```
-CDS = 0.30×mAP50 + 0.30×mAP50-95 + 0.10×F1 + 0.15×counting_acc + 0.15×small_obj_recall
+CDS = 0.25×mAP50 + 0.25×mAP50-95 + 0.10×F1 + 0.15×counting_acc + 0.15×small_obj_recall + 0.10×latency_score
 ```
 
-Higher is better. Quality gates: precision >= 0.90, recall >= 0.85.
+Higher is better. Quality gates: precision ≥ 0.90, recall ≥ 0.85, and mean tile `inference_ms` ≤ latency cap (default / env `AUTORESEARCH_LATENCY_GATE_MS` in `evaluate.py`).
 
 ## What Gets Modified
 
@@ -66,7 +66,7 @@ Higher is better. Quality gates: precision >= 0.90, recall >= 0.85.
 - `evaluate.py` — read-only CDS computation
 - `ollama_runner.py` — the loop driver
 - Deployment thresholds: conf=0.25, iou_nms=0.35
-- CDS weights and quality gate thresholds
+- CDS weights, quality gate thresholds, and latency mapping (`evaluate.py`)
 
 ## Hardware-Optimized Defaults
 
@@ -106,14 +106,29 @@ powershell -c "Get-Content run.log -Tail 20"  # Current training progress
 - Discard → git reset --hard HEAD~1
 - Never force push, never modify evaluate.py
 
-## Exploration Priorities
+## 探索顺序（建议按序尝试）
 
-1. **Model upgrade**: yolo12s (12GB VRAM can handle it easily)
-2. **Bigger batch**: try batch=24 or batch=32 if VRAM allows
-3. **Data augmentation**: copy_paste 0.3, mosaic tuning
-4. **Loss weights**: box loss, DFL tuning
-5. **LR schedule**: warmup, cosine decay
-6. **yolo12l**: 12GB VRAM might support it with batch=8
+Ollama 每轮只改 **一个** 明确假设；优先从上到下（先大方向、再细调），避免同一轮堆多项大改。
+
+1. **模型体量**：`yolo12n` → `yolo12s` →（显存允许再）`yolo12l` / `yolov8s` 对比；先定「精度–速度」再动别的。
+2. **Batch 与显存**：在 `imgsz=1280` 下从 `BATCH=16` 起，仅当训练稳定且 VRAM 有余再试 20–24；OOM 则降 batch，不要同时加大模型。
+3. **学习率与 schedule**：`LR0` / `LRF` / `cos_lr` 小幅调整；一次只改一类。
+4. **增强（单项）**：`mosaic`、`mixup`、`copy_paste`、`erasing` 等 **每次只动一两个参数**，便于归因。
+5. **Loss**：`box` / `cls` 权重微调。
+6. **Epochs / patience**：在单次训练时长可接受前提下再拉长；避免仅靠「训更久」刷 CDS。
+
+（英文备忘：Model → batch → LR → aug → loss → epochs，one hypothesis per experiment.）
+
+## 简洁性原则
+
+- **同等 CDS 下更简单更好**：更少增强开关、更少矛盾组合；能删复杂项不掉点则倾向删。
+- **拒绝为 +0.005 CDS 引入难维护配置**（例如极端增强、仅适配单张卡的魔法数）。
+- **可解释**：每轮 `DESCRIPTION` 应能说清「改什么、为什么」。
+
+## 依赖边界
+
+- **禁止**在实验中引入 `requirements.txt` 未列出的新 pip 包；需要新库须由人改依赖并提交，不由循环擅自假设。
+- **只改 `train.py` 的 EXPERIMENT CONFIG 区**；不修改 `evaluate.py`、`ollama_runner.py` 或未列文件来「绕开」指标。
 
 ## Pipeline Evaluation
 
