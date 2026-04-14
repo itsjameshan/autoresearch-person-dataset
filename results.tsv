@@ -3,3 +3,4 @@ commit	cds	mAP50	mAP50_95	small_obj_recall	precision	recall	counting_mae	inferen
 5786c0d	0.0000	0.0000	0.0000	0.0000	0.0000	0.0000	0.0	crash	baseline crash
 5786c0d	0.0000	0.0000	0.0000	0.0000	0.0000	0.0000	0.0	crash	baseline crash
 c87e0d5	0.0000	0.0000	0.0000	0.0000	0.0000	0.0000	0.0	crash	baseline crash
+2664f49	0.4995	0.6357	0.2002	0.0009	0.6358	0.6805	3.3186	14.6	1.0000	6.3	0	keep	baseline

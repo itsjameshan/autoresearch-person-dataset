@@ -40,7 +40,7 @@ IMGSZ = 640
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
 TIME_MINUTES = 5    # Ultralytics time= parameter (in hours internally)
-BATCH = 12
+BATCH = 16
 DEVICE = 0          # CUDA GPU 0
 
 # Learning rate
@@ -58,8 +58,8 @@ SCALE = 0.5
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 1.0
-MIXUP = 0.0
-COPY_PASTE = 0.0
+MIXUP = 0.1
+COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
