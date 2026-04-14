@@ -218,7 +218,7 @@ def run_training():
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(
-        [PYTHON, TRAIN_SCRIPT],
+        [PYTHON, "-u", TRAIN_SCRIPT],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         env=env, text=True, bufsize=1, encoding="utf-8", errors="replace",
     )
@@ -236,10 +236,8 @@ def run_training():
             log.write(line)
             log.flush()
             s = line.rstrip()
-            # Show key progress lines
-            if any(k in s for k in ("Epoch", "cds:", "mAP50", "precision", "recall",
-                                     "Error", "Traceback", "CUDA", "---", "EarlyStopping")):
-                print(f"  | {s}")
+            # Stream every line to terminal in real time and keep run.log for parsing.
+            print(f"  | {s}")
     proc.wait()
 
     dur = time.time() - t0
