@@ -4,16 +4,16 @@ train.py — THE ONE FILE the agent modifies.
 Each experiment: change hyperparams/model/augmentation here, then run:
   python train.py > run.log 2>&1
 
+Training runs for a FIXED TIME BUDGET of 5 minutes (wall clock).
 After training, this script calls evaluate_model() and prints structured
 metrics for the autoresearch loop to parse via grep.
 
-DO NOT modify: evaluate.py (defines CDS including latency), deployment thresholds, quality gates.
+DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
 """
 
 import os
 import sys
 import torch
-import ultralytics
 
 # ── Fix torch.load for newer PyTorch ──
 _original_load = torch.load
@@ -29,18 +29,18 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG — Agent modifies this section
 # ══════════════════════════════════════════════════════════════
 
-# Model — 必须使用仓库内路径（相对 train.py 所在目录），勿写裸文件名（否则会联网下载）
-# VRAM 预算: yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB | yolo12s+1280→~25GB(溢出!)
+# Model — use repo-relative path with person_dataset/ prefix
+# Available: person_dataset/yolov8n.pt, yolov8s.pt, yolo12n.pt, yolo12s.pt
+# VRAM budget (12GB limit): yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB
 MODEL = "person_dataset/yolov8s.pt"
 
 # Dataset
 DATA_YAML = "person_dataset/person.yaml"
-IMGSZ = 640         # 先用 640 验证流程；稳定后可升 1280（yolov8s+1280 约 8GB，12GB 内安全）
+IMGSZ = 640
 
-# Training — RTX 5070 12GB VRAM, 64GB RAM
-EPOCHS = 30         # 快速迭代；稳定后可升 50-100
-BATCH = 16          # yolov8s+640 在 12GB 内 batch=16 没问题
-PATIENCE = 10
+# Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
+TIME_MINUTES = 5    # Ultralytics time= parameter (in hours internally)
+BATCH = 16
 DEVICE = 0          # CUDA GPU 0
 
 # Learning rate
@@ -58,10 +58,10 @@ SCALE = 0.5
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 1.0
-MIXUP = 0.1         # <=0.2 防止 VRAM 翻倍
-COPY_PASTE = 0.1    # <=0.2 防止 VRAM 翻倍
+MIXUP = 0.1
+COPY_PASTE = 0.1
 ERASING = 0.4
-CLOSE_MOSAIC = 20
+CLOSE_MOSAIC = 10
 
 # Loss weights
 BOX = 7.5
@@ -69,8 +69,8 @@ CLS = 0.5
 
 # Other
 AMP = True
-CACHE = "ram"       # 64GB RAM 足够缓存整个数据集
-WORKERS = 8         # i5-14600KF 14 核
+CACHE = "ram"       # 64GB RAM — cache entire dataset
+WORKERS = 8
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════
@@ -83,36 +83,33 @@ NAME = "current"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-def _abs_under_repo(rel_or_abs: str) -> str:
+def _abs(rel_or_abs: str) -> str:
     if os.path.isabs(rel_or_abs):
         return os.path.normpath(rel_or_abs)
     return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
 
 
 def train():
-    model_path = _abs_under_repo(MODEL)
+    model_path = _abs(MODEL)
     if not os.path.isfile(model_path):
-        print(
-            f"[FATAL] 找不到权重: {model_path}\n"
-            "  请将 .pt 放在 person_dataset/ 下，且 MODEL 写成 person_dataset/xxx.pt；"
-            "勿使用裸文件名，否则会触发 Ultralytics 从 GitHub 下载。"
-        )
+        print(f"[FATAL] model not found: {model_path}")
         sys.exit(1)
 
-    data_yaml = _abs_under_repo(DATA_YAML)
+    data_yaml = _abs(DATA_YAML)
     if not os.path.isfile(data_yaml):
-        print(f"[FATAL] 找不到数据配置: {data_yaml}")
+        print(f"[FATAL] data yaml not found: {data_yaml}")
         sys.exit(1)
 
     model = YOLO(model_path)
 
     results = model.train(
         data=data_yaml,
-        epochs=EPOCHS,
+        epochs=300,             # high ceiling — time= will stop training
+        time=TIME_MINUTES / 60, # convert minutes to hours for Ultralytics
         imgsz=IMGSZ,
         batch=BATCH,
         device=DEVICE,
-        patience=PATIENCE,
+        patience=300,           # disable early stopping — let time budget decide
         project=PROJECT,
         name=NAME,
         exist_ok=True,
@@ -151,7 +148,7 @@ def train():
         verbose=True,
     )
 
-    # Find best model — use actual save_dir from results
+    # Find best model
     try:
         save_dir = str(results.save_dir)
     except Exception:
@@ -160,11 +157,10 @@ def train():
     if not os.path.exists(best_pt):
         best_pt = os.path.join(save_dir, "weights", "last.pt")
 
-    # Get epochs completed from results
     try:
         epochs_completed = results.epoch
     except Exception:
-        epochs_completed = EPOCHS
+        epochs_completed = 0
 
     return best_pt, epochs_completed
 
@@ -172,7 +168,7 @@ def train():
 if __name__ == "__main__":
     print(f"=== Autoresearch Experiment ===")
     print(f"Model: {MODEL}")
-    print(f"Epochs: {EPOCHS}, Batch: {BATCH}, ImgSz: {IMGSZ}")
+    print(f"Time budget: {TIME_MINUTES} min, Batch: {BATCH}, ImgSz: {IMGSZ}")
     print(f"LR: {LR0} → {LRF}, CosLR: {COS_LR}")
     print(f"Augmentation: mosaic={MOSAIC} mixup={MIXUP} copy_paste={COPY_PASTE}")
     print(f"Loss: box={BOX} cls={CLS}")
@@ -182,6 +178,6 @@ if __name__ == "__main__":
 
     print()
     print(f"=== Evaluation (model: {best_pt}) ===")
-    data_yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DATA_YAML)
+    data_yaml_path = _abs(DATA_YAML)
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
