@@ -40,7 +40,7 @@ IMGSZ = 640
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
 TIME_MINUTES = 5    # Ultralytics time= parameter (in hours internally)
-BATCH = 16
+BATCH = 12
 DEVICE = 0          # CUDA GPU 0
 
 # Learning rate
@@ -58,8 +58,8 @@ SCALE = 0.5
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 1.0
-MIXUP = 0.1
-COPY_PASTE = 0.1
+MIXUP = 0.0
+COPY_PASTE = 0.0
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
@@ -69,8 +69,8 @@ CLS = 0.5
 
 # Other
 AMP = True
-CACHE = "ram"       # 64GB RAM — cache entire dataset
-WORKERS = 8
+CACHE = "disk"      # Prefer deterministic and lower RAM pressure on Windows
+WORKERS = 2
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════

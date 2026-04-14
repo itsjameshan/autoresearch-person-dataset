@@ -221,7 +221,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     data_dir = Path(data_yaml).parent
     # Try to resolve paths from yaml
     import yaml
-    with open(data_yaml, "r") as f:
+    with open(data_yaml, "r", encoding="utf-8", errors="replace") as f:
         data_cfg = yaml.safe_load(f)
 
     # Resolve val image/label dirs
