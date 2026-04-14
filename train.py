@@ -32,7 +32,7 @@ from evaluate import evaluate_model, print_metrics
 # Model — use repo-relative path with person_dataset/ prefix
 # Available: person_dataset/yolov8n.pt, yolov8s.pt, yolo12n.pt, yolo12s.pt
 # VRAM budget (12GB limit): yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB
-MODEL = "person_dataset/yolov8s.pt"
+MODEL = "person_dataset/yolo12s.pt"
 
 # Dataset
 DATA_YAML = "person_dataset/person.yaml"
