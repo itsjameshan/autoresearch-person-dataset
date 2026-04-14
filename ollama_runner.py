@@ -14,7 +14,6 @@ Usage:
      全程无交互，直到：达标连击 / 连续 discard 平台期 / 满 MAX_EXPERIMENTS / 你 Ctrl+C。
      若 Git push 弹窗打断：先配置凭据，或 PowerShell 临时跳过远程同步：
        $env:AUTORESEARCH_SKIP_PUSH="1"; python ollama_runner.py
-
 The runner reads program.md, runs baseline, then autonomously loops:
   modify train.py → commit → train → evaluate → keep/discard → repeat
 """
@@ -43,7 +42,7 @@ OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "gemma3:4b").strip() 
 BRANCH = "autoresearch/crowd-win"
 MAX_EXPERIMENTS = 20
 COOLDOWN_SECONDS = 30        # Less than Mac (RTX 5070 has active cooling)
-TRAIN_TIMEOUT = 3600         # 60 minutes max per training run
+TRAIN_TIMEOUT = 14400  # 4 小时，根据你实际训练时间调整
 CDS_KEEP_THRESHOLD = 0.005
 TARGET_MET_STREAK_NEEDED = 3
 MAX_CONSECUTIVE_DISCARDS = 5
@@ -241,7 +240,7 @@ def git(*args):
     """Run a git command and return (returncode, stdout, stderr)."""
     result = subprocess.run(
         ["git"] + list(args),
-        capture_output=True, text=True, timeout=30
+        capture_output=True, text=True, timeout=30, encoding='utf-8', errors='replace'
     )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
@@ -281,7 +280,7 @@ def git_short_hash():
 
 def read_file(path):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             return f.read()
     return ""
 
@@ -393,6 +392,8 @@ def run_training():
         env=env,
         text=True,
         bufsize=1,
+        encoding='utf-8',
+        errors='replace'
     )
 
     killer_done = {"v": False}
@@ -557,55 +558,36 @@ def update_status(experiment_num, best_cds, best_commit, best_desc,
 # ══════════════════════════════════════════════════════════════
 
 def generate_experiment(experiment_num, current_config, results_history, suggestions):
-    """Ask Ollama to propose the next experiment modification."""
-
     prompt = f"""You are an autonomous ML researcher optimizing a YOLOv12 dense crowd detection model.
-Your goal: maximize CDS (Crowd Detection Score). CDS includes ~10% weight on latency (faster inference -> higher score), plus mAP/F1/counting/small-object terms. TARGET_MET requires precision>=0.90, recall>=0.85, AND mean inference_ms <= latency cap (default in evaluate.py; set AUTORESEARCH_LATENCY_GATE_MS for client hardware).
+Your goal: maximize CDS (Crowd Detection Score).
 
 Hardware: Windows, RTX 5070 12GB VRAM, 64GB RAM, i5-14600KF.
-Constraints: batch<=16 at imgsz=1280 (12GB VRAM), cache="ram" is fine (64GB).
-WEIGHTS RULE (mandatory): All MODEL paths MUST be under person_dataset/ with the exact filename on disk.
-Never use bare names like yolo12s.pt or yolo12n.pt — Ultralytics will download from the internet into the repo root.
+Constraints: batch<=16 at imgsz=1280 (12GB VRAM), cache="ram".
 
 Current train.py config:
-```python
 {current_config}
-```
 
-Experiment history (results.tsv):
-```
+Experiment history:
 {results_history}
-```
 
-Suggestions from advisor:
-```
+Suggestions:
 {suggestions}
-```
 
-This is experiment #{experiment_num}. Based on the history, propose ONE specific change to train.py.
+This is experiment #{experiment_num}.
+Propose ONE specific change to train.py.
 
-Rules:
-- Only change variables in the EXPERIMENT CONFIG section
-- MODEL must be EXACTLY one of these local files (repo root = autoresearch project folder), never a bare name:
-  person_dataset/yolov8n.pt, person_dataset/yolo12n.pt, person_dataset/yolo12s.pt, person_dataset/yolo12l.pt
-- Do NOT change DEVICE, DATA_YAML, or anything below "TRAINING — do not modify"
-- Keep changes focused — one hypothesis per experiment
-- If recent experiments failed, try something different
+Respond EXACTLY in this format:
+DESCRIPTION: ...
+VAR = value
+VAR2 = value
 
-Respond with EXACTLY:
-1. One line: DESCRIPTION: <what you're trying and why>
-2. Then ONLY the Python variable assignments that change, e.g.:
-MODEL = "person_dataset/yolo12s.pt"
-BATCH = 12
-
-Do not include unchanged variables. Do not include explanations after the assignments.
+Do not include extra text.
 """
 
     response = query_ollama(prompt, temperature=0.7)
     if not response:
         return None, None
 
-    # Parse response
     lines = response.strip().split("\n")
     description = ""
     config_lines = []
@@ -614,265 +596,288 @@ Do not include unchanged variables. Do not include explanations after the assign
         line = line.strip()
         if line.startswith("DESCRIPTION:"):
             description = line.replace("DESCRIPTION:", "").strip()
-        elif re.match(r'^[A-Z_]+\s*=', line):
-            # Remove markdown code fence artifacts
+        elif "=" in line and line.split("=")[0].strip().isupper():
             clean = line.replace("`", "").strip()
             config_lines.append(clean)
 
     if not description:
-        description = f"ollama experiment #{experiment_num}"
+        description = f"experiment {experiment_num}"
 
     config_block = "\n".join(config_lines)
     return description, config_block
-
 
 # ══════════════════════════════════════════════════════════════
 # MAIN LOOP
 # ══════════════════════════════════════════════════════════════
 
 def main():
-    global OLLAMA_MODEL
-
-    session_start = time.time()
-    rolling_train_sec = deque(maxlen=5)
-    OLLAMA_MODEL = resolve_ollama_model_name(OLLAMA_MODEL)
-
-    print("=" * 60)
-    print("AUTORESEARCH — Ollama 自主实验循环（中文进度说明）")
-    print(f"  模型: {OLLAMA_MODEL}")
+    global OLLAMA_MODEL  # ⬅️ 必须放在最前面
+    print("╔" + "═" * 58 + "╗")
+    print("║" + " " * 15 + "Ollama Runner - 自主实验循环" + " " * 15 + "║")
+    print("╚" + "═" * 58 + "╝")
     print(f"  分支: {BRANCH}")
-    print(f"  会话内最多实验轮次上限: {MAX_EXPERIMENTS}（含基线占用的一轮逻辑，见下）")
-    print(f"  训练超时: {TRAIN_TIMEOUT // 60} 分钟  |  轮间冷却: {COOLDOWN_SECONDS} 秒")
-    print("=" * 60)
+    print(f"  模型: {OLLAMA_MODEL} (环境变量 AUTORESEARCH_OLLAMA_MODEL 可覆盖)")
+    print(f"  实验上限: {MAX_EXPERIMENTS} 轮 | 达标连击要求: {TARGET_MET_STREAK_NEEDED} | 连续未提升上限: {MAX_CONSECUTIVE_DISCARDS}")
+    print()
 
-    # Check Ollama connectivity
-    test = query_ollama("Say OK", max_tokens=10)
-    if test is None:
-        print("\n【致命错误】无法连接 Ollama 或模型不可用（连接错误、HTTP 404 等）。")
-        print("  请确认托盘或 ollama serve 已运行，且模型名与 `ollama list` 一致。")
-        print(f"  查看模型: {_ollama_cli_hint()}")
+    # 解析最终使用的模型名（与 Ollama list 对齐）
+    OLLAMA_MODEL = resolve_ollama_model_name(OLLAMA_MODEL)
+    print(f"[INFO] 实际请求 Ollama 模型名: {OLLAMA_MODEL!r}")
+
+    # 检查必要文件
+    if not os.path.exists(TRAIN_SCRIPT):
+        print(f"[FATAL] 未找到训练脚本 {TRAIN_SCRIPT}，请在项目目录下运行。")
         sys.exit(1)
-    print(f"【就绪】Ollama 已连接，使用模型: {OLLAMA_MODEL}")
 
-    # Check git branch
-    rc, branch, _ = git("branch", "--show-current")
-    if branch != BRANCH:
-        print(f"Switching to branch {BRANCH}...")
-        git("checkout", BRANCH)
+    # Git 准备：切换到目标分支（若不存在则创建）
+    rc, out, err = git("checkout", BRANCH)
+    if rc != 0:
+        print(f"[INFO] 分支 {BRANCH} 不存在，尝试创建...")
+        rc2, _, _ = git("checkout", "-b", BRANCH)
+        if rc2 != 0:
+            print(f"[WARN] Git 分支操作失败，但继续执行（可能已在该分支）。")
 
-    # State
-    best_cds = 0.0
-    best_commit = "N/A"
-    best_desc = "N/A"
-    target_met_streak = 0
+    # 初始化结果文件（如不存在）
+    if not os.path.exists(RESULTS_TSV):
+        header = "commit\tcds\tmAP50\tmAP50_95\tsmall_obj_recall\tprecision\trecall\tcounting_mae\tinference_ms\tlatency_score\tpeak_memory_gb\tepochs\tstatus\tdescription\n"
+        with open(RESULTS_TSV, "w", encoding="utf-8") as f:
+            f.write(header)
+
+    # 读取 suggestions.md（如有）
+    suggestions = read_file(SUGGESTIONS_MD) or "（无预设建议，请基于当前结果探索）"
+
+    # 状态变量
+    session_start = time.time()
+    best_cds = -1.0
+    best_commit = ""
+    best_desc = ""
+    best_metrics = {}
     consecutive_discards = 0
-    last_experiments = []
-    what_worked = "(pending first experiments)"
+    target_met_streak = 0
+    experiment_num = 0
+    last_experiments = []          # 每个元素为 dict: num, cds, status, desc
+    rolling_train_sec = deque(maxlen=5)  # 用于估算剩余时间
 
-    # Read existing results to resume state
-    existing = read_file(RESULTS_TSV)
-    existing_lines = [l for l in existing.strip().split("\n")[1:] if l.strip()]
-    start_num = len(existing_lines)
+    # 信号处理（Ctrl+C 优雅退出）
+    stop_requested = {"value": False}
+    def signal_handler(sig, frame):
+        print("\n[用户中断] 正在安全退出...")
+        stop_requested["value"] = True
+    signal.signal(signal.SIGINT, signal_handler)
 
-    for line in existing_lines:
-        parts = line.split("\t")
-        if len(parts) >= 2:
-            try:
-                cds = float(parts[1])
-                if cds > best_cds:
-                    best_cds = cds
-                    best_commit = parts[0]
-                    best_desc = parts[-1] if len(parts) >= 14 else "previous"
-            except ValueError:
-                pass
+    # ─────────────────────────────────────────────────────────────
+    # 基线实验（实验 #0）
+    # ─────────────────────────────────────────────────────────────
+    print("\n" + "█" * 60)
+    print("【阶段 1/2】运行基线训练（当前 train.py 配置）")
+    print("█" * 60)
 
-    # ── BASELINE (if no results yet) ──
-    if start_num == 0:
-        print_progress_header_cn(
-            "基线：不修改 train.py，直接训练+评估当前配置",
-            session_start, 0, best_cds, 0, 0, list(rolling_train_sec),
-        )
-        print("【步骤】提交基线 git commit 并启动 train.py …\n")
-        git_commit("experiment: baseline — " + read_train_config()[:80].replace("\n", " "))
-        success, metrics, dur = run_training()
-        rolling_train_sec.append(dur)
-        commit = git_short_hash()
+    success, metrics, duration = run_training()
+    rolling_train_sec.append(duration)
 
-        if success and "cds" in metrics:
-            cds = parse_cds(metrics)
-            best_cds = cds
-            best_commit = commit
-            best_desc = "baseline"
-            target_met = metrics_target_met(metrics)
+    if not success:
+        print("[FATAL] 基线训练失败，请检查 train.py 与环境后重试。")
+        sys.exit(1)
 
-            append_result(commit, metrics, "keep", "baseline" + (" [TARGET_MET]" if target_met else ""))
-            git("add", RESULTS_TSV, STATUS_MD)
-            git("commit", "--amend", "--no-edit")
-            git_push()
-            print(f"\n【基线完成】CDS = {cds:.4f}" + ("  ✅ 已满足 TARGET_MET 门槛" if target_met else ""))
-            last_experiments.append({"num": 0, "cds": cds, "status": "keep", "desc": "baseline"})
-        else:
-            print("\n【基线失败】请查看上方指标与 run.log 尾部。")
-            tail = read_file(RUN_LOG)[-500:]
-            print(tail)
-            append_result(commit, metrics, "crash", "baseline crash")
-            git_reset_hard()
-            # Still continue — maybe the config needs adjustment
+    cds = parse_cds(metrics)
+    commit = git_short_hash()
+    description = "baseline"
+    status = "baseline"
+    append_result(commit, metrics, status, description)
+    last_experiments.append({"num": 0, "cds": f"{cds:.4f}", "status": status, "desc": description})
 
-        start_num = 1
+    # 基线作为当前最佳
+    best_cds = cds
+    best_commit = commit
+    best_desc = description
+    best_metrics = metrics
 
-    # ── EXPERIMENT LOOP ──
-    for exp_num in range(start_num, MAX_EXPERIMENTS):
-        print(f"\n{'='*60}")
-        print(f"实验轮次 #{exp_num} / 编号小于 {MAX_EXPERIMENTS} 即在本会话范围内")
-        print(f"{'='*60}")
+    # Git 提交基线（如未提交）
+    rc, _, _ = git("diff", "--quiet", TRAIN_SCRIPT)
+    if rc != 0:
+        git_commit(f"baseline: CDS={cds:.4f}")
+        git_commit_results(f"baseline results")
 
-        print_progress_header_cn(
-            f"第 {exp_num} 轮：Ollama 假设 → 训练 → 评估",
-            session_start, exp_num, best_cds, consecutive_discards, target_met_streak,
-            list(rolling_train_sec),
-        )
+    # 判断是否直接达标
+    if metrics_target_met(metrics):
+        target_met_streak = 1
+        print(f"  基线即满足质量门 (P/R/latency 全部 PASS)，TARGET_MET 连击 = {target_met_streak}")
+    else:
+        target_met_streak = 0
 
-        # Check stop conditions
-        if target_met_streak >= TARGET_MET_STREAK_NEEDED:
-            print(f"\n【停止条件】已连续 {TARGET_MET_STREAK_NEEDED} 次 KEEP 且达标 — 结束会话")
-            git_push()
+    # 打印进度头
+    print_progress_header_cn(
+        phase="基线完成，即将开始自主实验循环",
+        session_start=session_start,
+        exp_num=0,
+        best_cds=best_cds,
+        consecutive_discards=consecutive_discards,
+        target_met_streak=target_met_streak,
+        rolling_train_sec=list(rolling_train_sec),
+    )
+
+    # ─────────────────────────────────────────────────────────────
+    # 自主实验循环
+    # ─────────────────────────────────────────────────────────────
+    print("\n" + "█" * 60)
+    print("【阶段 2/2】进入自主实验循环")
+    print("█" * 60)
+
+    while experiment_num < MAX_EXPERIMENTS:
+        if stop_requested["value"]:
+            print("[用户中断] 退出循环。")
             break
 
-        if consecutive_discards >= MAX_CONSECUTIVE_DISCARDS:
-            print(f"\n【停止条件】已连续 {MAX_CONSECUTIVE_DISCARDS} 次未提升 — 判定平台期，结束会话")
-            # Write analysis
-            analysis = query_ollama(
-                f"Analyze these experiment results and suggest new directions:\n{get_results_history()}",
-                max_tokens=1000
-            )
-            if analysis:
-                with open(SUGGESTIONS_MD, "w", encoding="utf-8") as f:
-                    f.write(f"# Plateau Analysis (after {exp_num} experiments)\n\n{analysis}\n")
-            git_push()
-            break
+        experiment_num += 1
+        print(f"\n{'#' * 60}")
+        print(f"【实验 #{experiment_num}】生成实验修改...")
+        print(f"{'#' * 60}")
 
-        # Generate next experiment via Ollama
-        print("【步骤】正在调用 Ollama 根据 program.md / results.tsv 生成 train.py 修改建议 …")
+        # 读取当前配置
         current_config = read_train_config()
         results_history = get_results_history()
-        suggestions = read_file(SUGGESTIONS_MD)
+        if not results_history:
+            results_history = "（暂无历史记录）"
 
+        # 调用 LLM 生成实验
         description, config_block = generate_experiment(
-            exp_num, current_config, results_history, suggestions
+            experiment_num, current_config, results_history, suggestions
         )
+        if description is None or config_block is None:
+            print("[ERROR] LLM 返回无效响应，跳过本轮，等待冷却后重试。")
+            time.sleep(COOLDOWN_SECONDS)
+            continue
 
-        if not config_block:
-            print("【提示】Ollama 未返回可解析的配置行，提高温度重试一次 …")
-            description, config_block = generate_experiment(
-                exp_num, current_config, results_history, suggestions
-            )
-            if not config_block:
-                print("【跳过】仍无有效修改，本回合不计入训练，连续 discard +1")
-                consecutive_discards += 1
-                continue
+        print(f"  LLM 建议: {description}")
+        print("  修改配置:")
+        for line in config_block.split("\n"):
+            if line.strip():
+                print(f"    {line.strip()}")
 
-        # Apply changes
-        print(f"\n【假设】{description}")
-        print(f"【将写入 train.py 的赋值】\n{config_block}\n")
-        apply_train_changes(config_block)
+        # 备份当前 train.py（以防修改失败）
+        backup_content = read_file(TRAIN_SCRIPT)
 
-        # Git commit
-        git_commit(f"experiment: {description}")
+        # 应用修改
+        try:
+            apply_train_changes(config_block)
+        except Exception as e:
+            print(f"[ERROR] 应用修改时出错: {e}，恢复 train.py 并跳过本轮。")
+            with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+                f.write(backup_content)
+            time.sleep(COOLDOWN_SECONDS)
+            continue
 
-        # Run training
-        success, metrics, dur = run_training()
-        rolling_train_sec.append(dur)
-        commit = git_short_hash()
+        # 提交修改
+        commit_msg = f"exp{experiment_num}: {description}"
+        rc, _, err = git_commit(commit_msg)
+        if rc != 0:
+            print(f"[WARN] Git commit 失败: {err}，但继续训练。")
 
-        if not success or "cds" not in metrics:
-            # CRASH
-            print("【崩溃】训练或评估失败，正在展示 run.log 片段 …")
-            tail = read_file(RUN_LOG)[-500:]
-            print(tail[-300:])
-            append_result(commit, {}, "crash", f"crash: {description}")
+        # 训练
+        success, metrics, duration = run_training()
+        rolling_train_sec.append(duration)
+
+        if not success:
+            print(f"[实验失败] 训练未成功完成，回滚到上一版本。")
+            status = "failed"
+            cds = 0.0
+            # 回滚 Git 和文件
             git_reset_hard()
-            # Commit just the results.tsv
-            git("add", RESULTS_TSV)
-            git("commit", "-m", f"log: crash — {description}")
-            git_push()
+            with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+                f.write(backup_content)
+            append_result("ROLLBACK", metrics if metrics else {}, status, description)
+            last_experiments.append({"num": experiment_num, "cds": "N/A", "status": status, "desc": description})
             consecutive_discards += 1
-            last_experiments.append({"num": exp_num, "cds": "CRASH", "status": "crash", "desc": description})
+            target_met_streak = 0
         else:
             cds = parse_cds(metrics)
-            improvement = cds - best_cds
-            target_met = metrics_target_met(metrics)
-
-            print(f"\n【决策输入】本轮 CDS={cds:.4f}  |  历史最佳={best_cds:.4f}  |  提升={improvement:+.4f}  |  保留阈值>{CDS_KEEP_THRESHOLD}")
-
-            if improvement > CDS_KEEP_THRESHOLD:
-                # KEEP
-                status_str = "keep" + (" [TARGET_MET]" if target_met else "")
-                append_result(commit, metrics, status_str, description)
+            commit = git_short_hash()
+            # 判断是否提升
+            if cds > best_cds + CDS_KEEP_THRESHOLD:
+                status = "improved"
                 best_cds = cds
                 best_commit = commit
                 best_desc = description
+                best_metrics = metrics
                 consecutive_discards = 0
-
-                if target_met:
-                    target_met_streak += 1
-                else:
-                    target_met_streak = 0
-
-                git("add", RESULTS_TSV, STATUS_MD)
-                git("commit", "--amend", "--no-edit")
-                git_push()
-                print(f"【结果】✅ KEEP — CDS 提升 {improvement:+.4f}，已 amend 提交并 push")
-                if target_met:
-                    print(f"  本轮同时满足 TARGET_MET（连击 {target_met_streak}/{TARGET_MET_STREAK_NEEDED}）")
-
-                last_experiments.append({"num": exp_num, "cds": cds, "status": "keep", "desc": description})
-                what_worked = "\n".join(
-                    f"- {e['desc']} (CDS: {e['cds']})"
-                    for e in last_experiments if e["status"] == "keep"
-                )[-500:]
+                # 追加结果并 amend 提交
+                append_result(commit, metrics, status, description)
+                git_commit_results(commit_msg)
             else:
-                # DISCARD
-                append_result(commit, metrics, "discard", description)
-                git_reset_hard()
-                # Commit results.tsv separately
-                git("add", RESULTS_TSV)
-                git("commit", "-m", f"log: discard — {description}")
-                git_push()
+                status = "discard"
                 consecutive_discards += 1
+                # 回滚
+                git_reset_hard()
+                with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+                    f.write(backup_content)
+                append_result("DISCARD", metrics, status, description)
+
+            # 更新目标达标连击
+            if metrics_target_met(metrics):
+                target_met_streak += 1
+                print(f"  质量门全部 PASS，当前连击: {target_met_streak}/{TARGET_MET_STREAK_NEEDED}")
+            else:
                 target_met_streak = 0
-                print(f"【结果】❌ DISCARD — CDS 变化 {improvement:+.4f} 未超过阈值，已 git reset 丢弃本轮 train.py")
 
-                last_experiments.append({"num": exp_num, "cds": cds, "status": "discard", "desc": description})
+            last_experiments.append({"num": experiment_num, "cds": f"{cds:.4f}", "status": status, "desc": description})
 
-        # Update status dashboard
+        # 更新状态面板
         update_status(
-            exp_num + 1, best_cds, best_commit, best_desc,
-            metrics, target_met_streak, consecutive_discards,
-            last_experiments, what_worked,
-            "generating next hypothesis..."
+            experiment_num=experiment_num,
+            best_cds=best_cds,
+            best_commit=best_commit,
+            best_desc=best_desc,
+            metrics=best_metrics,
+            target_met_streak=target_met_streak,
+            consecutive_discards=consecutive_discards,
+            last_experiments=last_experiments,
+            what_worked=f"当前最佳描述: {best_desc} (CDS={best_cds:.4f})",
+            next_experiment=f"待 LLM 生成实验 #{experiment_num+1}",
         )
 
-        # Cooldown
-        total_min = (time.time() - session_start) / 60.0
-        print(f"\n【冷却】等待 {COOLDOWN_SECONDS} 秒后开始下一轮…（本会话已累计 {total_min:.1f} 分钟）")
+        # 尝试推送（若未跳过）
+        git_push()
+
+        # 打印进度头
+        print_progress_header_cn(
+            phase=f"实验 #{experiment_num} 完成",
+            session_start=session_start,
+            exp_num=experiment_num,
+            best_cds=best_cds,
+            consecutive_discards=consecutive_discards,
+            target_met_streak=target_met_streak,
+            rolling_train_sec=list(rolling_train_sec),
+        )
+
+        # 检查停止条件
+        if target_met_streak >= TARGET_MET_STREAK_NEEDED:
+            print(f"\n【停止】达标连击 {target_met_streak} 次（要求 {TARGET_MET_STREAK_NEEDED}），任务完成！")
+            break
+        if consecutive_discards >= MAX_CONSECUTIVE_DISCARDS:
+            print(f"\n【停止】连续 {consecutive_discards} 次未提升（平台期），提前结束。")
+            break
+        if experiment_num >= MAX_EXPERIMENTS:
+            print(f"\n【停止】已达到最大实验数 {MAX_EXPERIMENTS}。")
+            break
+
+        # 冷却
+        print(f"\n冷却 {COOLDOWN_SECONDS} 秒...")
         time.sleep(COOLDOWN_SECONDS)
 
-    # Final summary
-    total_session_min = (time.time() - session_start) / 60.0
-    print("\n" + "=" * 60)
-    print("【会话结束】AUTORESEARCH")
-    print(f"  本终端记录到的实验条目数: {len(last_experiments)}")
-    print(f"  最佳 CDS: {best_cds:.4f}  （commit {best_commit}）")
-    print(f"  对应描述: {best_desc}")
-    print(f"  本会话总耗时: {total_session_min:.1f} 分钟")
-    print("  详情仍见: results.tsv 、 status.md 、 run.log")
-    print("=" * 60)
+    # ─────────────────────────────────────────────────────────────
+    # 结束总结
+    # ─────────────────────────────────────────────────────────────
+    print("\n" + "█" * 60)
+    print("【自主实验结束】")
+    print(f"  总实验数: {experiment_num}")
+    print(f"  历史最佳 CDS: {best_cds:.4f} (commit: {best_commit})")
+    print(f"  最佳描述: {best_desc}")
+    print(f"  总耗时: {(time.time() - session_start) / 60:.1f} 分钟")
+    print("█" * 60)
 
-    # Final push
-    git("add", RESULTS_TSV, STATUS_MD)
-    git("commit", "-m", "autoresearch: session complete")
+    # 最终推送
     git_push()
+    print("实验记录已保存至 results.tsv 与 status.md。")
 
 
 if __name__ == "__main__":
