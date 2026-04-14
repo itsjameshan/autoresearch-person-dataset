@@ -271,7 +271,7 @@ def parse_metrics():
 
 def init_results():
     if not os.path.exists(RESULTS_TSV):
-        with open(RESULTS_TSV, "w") as f:
+        with open(RESULTS_TSV, "w", encoding="utf-8") as f:
             f.write("commit\tcds\tmAP50\tmAP50_95\tsmall_obj_recall\tprecision\trecall\tmemory_gb\tstatus\tdescription\n")
 
 
@@ -360,7 +360,7 @@ VAR = value
         line = line.strip()
         if line.startswith("DESCRIPTION:"):
             desc = line.replace("DESCRIPTION:", "").strip()
-        elif re.match(r'^[A-Z_]+\s*=', line):
+        elif re.match(r'^[A-Z_0-9]+\s*=', line):
             config_lines.append(line.replace("`", ""))
     return desc or f"experiment {exp_num}", "\n".join(config_lines)
 
