@@ -270,7 +270,10 @@ def parse_metrics():
 def init_results():
     if not os.path.exists(RESULTS_TSV):
         with open(RESULTS_TSV, "w", encoding="utf-8") as f:
-            f.write("commit\tcds\tmAP50\tmAP50_95\tsmall_obj_recall\tprecision\trecall\tmemory_gb\tstatus\tdescription\n")
+            f.write(
+                "commit\tcds\tmAP50\tmAP50_95\tsmall_obj_recall\tprecision\trecall\t"
+                "counting_mae\tinference_ms\tlatency_score\tmemory_gb\tepochs\tstatus\tdescription\n"
+            )
 
 
 def log_result(commit, metrics, status, desc):
@@ -280,12 +283,19 @@ def log_result(commit, metrics, status, desc):
     small_obj = metrics.get("small_obj_recall", "0.0000")
     prec = metrics.get("precision", "0.0000")
     rec = metrics.get("recall", "0.0000")
+    counting_mae = metrics.get("counting_mae", "0.0000")
+    inference_ms = metrics.get("inference_ms", "0.0")
+    latency_score = metrics.get("latency_score", "0.0000")
+    epochs = metrics.get("epochs_completed", "0")
     mem = metrics.get("peak_memory_mb", "0")
     try:
         mem_gb = f"{float(mem)/1024:.1f}"
     except (ValueError, TypeError):
         mem_gb = "0.0"
-    row = f"{commit}\t{cds}\t{mAP50}\t{mAP50_95}\t{small_obj}\t{prec}\t{rec}\t{mem_gb}\t{status}\t{desc}\n"
+    row = (
+        f"{commit}\t{cds}\t{mAP50}\t{mAP50_95}\t{small_obj}\t{prec}\t{rec}\t"
+        f"{counting_mae}\t{inference_ms}\t{latency_score}\t{mem_gb}\t{epochs}\t{status}\t{desc}\n"
+    )
     with open(RESULTS_TSV, "a", encoding="utf-8") as f:
         f.write(row)
 

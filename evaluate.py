@@ -43,8 +43,9 @@ LATENCY_MS_FULL_SCORE = 25.0   # at or below -> latency_score = 1.0
 LATENCY_MS_ZERO_SCORE = 220.0  # at or above -> latency_score = 0.0
 
 # Deployment thresholds (from project doc)
-DEPLOY_CONF = 0.25
-DEPLOY_IOU_NMS = 0.35
+# Default deployment thresholds frozen from threshold_sweep.tsv (GPU 5070 baseline).
+DEPLOY_CONF = 0.20
+DEPLOY_IOU_NMS = 0.30
 
 # Quality gates
 PRECISION_GATE = 0.90
@@ -69,6 +70,32 @@ def get_latency_gate_ms():
                 file=sys.stderr,
             )
     return _LATENCY_GATE_DEFAULT_MS
+
+
+def get_deploy_conf():
+    """Return deployment confidence threshold (supports env override)."""
+    raw = os.environ.get("AUTORESEARCH_DEPLOY_CONF", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if 0.0 <= v <= 1.0:
+                return v
+        except ValueError:
+            print("evaluate: invalid AUTORESEARCH_DEPLOY_CONF, using default", file=sys.stderr)
+    return DEPLOY_CONF
+
+
+def get_deploy_iou_nms():
+    """Return deployment NMS IoU threshold (supports env override)."""
+    raw = os.environ.get("AUTORESEARCH_DEPLOY_IOU_NMS", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if 0.0 <= v <= 1.0:
+                return v
+        except ValueError:
+            print("evaluate: invalid AUTORESEARCH_DEPLOY_IOU_NMS, using default", file=sys.stderr)
+    return DEPLOY_IOU_NMS
 
 
 # Small object threshold: GT box area < 0.5% of image area
@@ -193,6 +220,10 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     # ── Watchdog: hard-kill if anything below hangs ──
     _watchdog = _start_eval_watchdog()
 
+    # ── Resolve deployment thresholds for this run ──
+    deploy_conf = get_deploy_conf()
+    deploy_iou_nms = get_deploy_iou_nms()
+
     # ── Load model ──
     model = YOLO(model_path)
 
@@ -254,8 +285,8 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         # Run inference with deployment thresholds (single pass per image)
         results = model(
             img_path,
-            conf=DEPLOY_CONF,
-            iou=DEPLOY_IOU_NMS,
+            conf=deploy_conf,
+            iou=deploy_iou_nms,
             imgsz=imgsz,
             device=0,
             verbose=False,
@@ -299,13 +330,13 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     timing_imgs = val_images[:WARMUP_IMAGES + TIMING_IMAGES]
     # Warmup
     for img in timing_imgs[:WARMUP_IMAGES]:
-        model(img, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS, imgsz=imgsz,
+        model(img, conf=deploy_conf, iou=deploy_iou_nms, imgsz=imgsz,
               device=0, verbose=False)
     # Timed runs
     times = []
     for img in timing_imgs[WARMUP_IMAGES:]:
         t0 = time.time()
-        model(img, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS, imgsz=imgsz,
+        model(img, conf=deploy_conf, iou=deploy_iou_nms, imgsz=imgsz,
               device=0, verbose=False)
         times.append((time.time() - t0) * 1000)
     inference_ms = float(np.mean(times)) if times else 0.0
@@ -320,7 +351,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     # ── Mean confidence of detections ──
     all_confs = []
     for img_path in val_images[:50]:  # Sample 50 images for speed
-        results = model(img_path, conf=DEPLOY_CONF, iou=DEPLOY_IOU_NMS,
+        results = model(img_path, conf=deploy_conf, iou=deploy_iou_nms,
                         imgsz=imgsz, device=0, verbose=False)
         if results[0].boxes is not None and len(results[0].boxes) > 0:
             all_confs.extend(results[0].boxes.conf.cpu().numpy().tolist())
@@ -377,6 +408,8 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         "inference_ms": round(inference_ms, 1),
         "latency_score": round(latency_score, 4),
         "peak_memory_mb": round(peak_memory_mb, 1),
+        "deploy_conf": round(deploy_conf, 4),
+        "deploy_iou_nms": round(deploy_iou_nms, 4),
         "precision_gate": precision_gate,
         "recall_gate": recall_gate,
         "latency_gate": latency_gate,
@@ -412,6 +445,8 @@ def print_metrics(metrics, epochs_completed=0):
     print(f"inference_ms:     {metrics['inference_ms']}")
     print(f"latency_score:    {metrics['latency_score']:.4f}")
     print(f"peak_memory_mb:   {metrics['peak_memory_mb']}")
+    print(f"deploy_conf:      {metrics.get('deploy_conf', DEPLOY_CONF)}")
+    print(f"deploy_iou_nms:   {metrics.get('deploy_iou_nms', DEPLOY_IOU_NMS)}")
     print(f"epochs_completed: {epochs_completed}")
     print(f"precision_gate:   {metrics['precision_gate']}")
     print(f"recall_gate:      {metrics['recall_gate']}")

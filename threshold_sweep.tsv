@@ -1,0 +1,10 @@
+conf	iou_nms	elapsed_sec	returncode	cds	precision	recall	inference_ms	precision_gate	recall_gate	latency_gate	target_met	error
+0.2	0.3	54.7	0	0.4969	0.6109	0.6817	13.9	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.2	0.4	54.7	0	0.495	0.6109	0.6817	14.9	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.2	0.5	54.8	0	0.4924	0.6109	0.6817	14.5	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.3	0.4	70.8	0	0.4821	0.6109	0.6817	14.1	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.3	0.5	54.2	0	0.4821	0.6109	0.6817	13.8	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.3	0.3	74.0	0	0.4816	0.6109	0.6817	25.9	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.1	0.3	54.8	0	0.4747	0.6109	0.6817	14.9	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.1	0.4	55.9	0	0.4595	0.6109	0.6817	15.2	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
+0.1	0.5	55.5	0	0.4363	0.6109	0.6817	15.2	FAIL(0.61<0.9)	FAIL(0.68<0.85)	PASS	False	
