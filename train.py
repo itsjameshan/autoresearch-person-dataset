@@ -29,17 +29,18 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG — Agent modifies this section
 # ══════════════════════════════════════════════════════════════
 
-# Model — 必须使用仓库内路径（相对 train.py 所在目录），勿写裸文件名如 yolo12s.pt（否则会联网下载）
-MODEL = "person_dataset/yolo12s.pt"
+# Model — 必须使用仓库内路径（相对 train.py 所在目录），勿写裸文件名（否则会联网下载）
+# VRAM 预算: yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB | yolo12s+1280→~25GB(溢出!)
+MODEL = "person_dataset/yolov8s.pt"
 
 # Dataset
 DATA_YAML = "person_dataset/person.yaml"
-IMGSZ = 1280
+IMGSZ = 640         # 先用 640 验证流程；稳定后可升 1280（yolov8s+1280 约 8GB，12GB 内安全）
 
 # Training — RTX 5070 12GB VRAM, 64GB RAM
-EPOCHS = 100
-BATCH = 8
-PATIENCE = 30
+EPOCHS = 30         # 快速迭代；稳定后可升 50-100
+BATCH = 16          # yolov8s+640 在 12GB 内 batch=16 没问题
+PATIENCE = 10
 DEVICE = 0          # CUDA GPU 0
 
 # Learning rate
@@ -57,9 +58,9 @@ SCALE = 0.5
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 1.0
-MIXUP = 0.3
-COPY_PASTE = 0.5
-ERASING = 0.6
+MIXUP = 0.1         # <=0.2 防止 VRAM 翻倍
+COPY_PASTE = 0.1    # <=0.2 防止 VRAM 翻倍
+ERASING = 0.4
 CLOSE_MOSAIC = 20
 
 # Loss weights
@@ -68,9 +69,8 @@ CLS = 0.5
 
 # Other
 AMP = True
-# Windows + ollama_runner 子进程里 ram cache + 多 workers 易 MemoryError；稳定后可改回 "ram" / 提高 workers
-CACHE = False
-WORKERS = 2
+CACHE = "ram"       # 64GB RAM 足够缓存整个数据集
+WORKERS = 8         # i5-14600KF 14 核
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════

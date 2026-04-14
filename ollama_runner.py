@@ -2,15 +2,16 @@
 ollama_runner.py — Autonomous experiment loop driven by Ollama (local LLM).
 
 Replaces Claude Code / Codex CLI for machines without cloud AI access.
-Uses Ollama API (http://localhost:11434). Default model: gemma3:4b (也可用
-AUTORESEARCH_OLLAMA_MODEL 指向 `ollama list` 中的任意名称，例如 qwen2.5-coder:14b)。
+Uses Ollama API (http://localhost:11434). Default model: qwen2.5-coder:14b（代码生成
+能力远强于通用模型，推荐用于 autoresearch）。
 
 Usage:
-  1. Start Ollama (tray app or: ollama serve)
-     Windows: & "$env:LOCALAPPDATA\\Programs\\Ollama\\ollama.exe" list
-  2. Pull: ollama pull gemma3:4b（可选再 pull qwen2.5-coder:14b）
-  3. Optional: $env:AUTORESEARCH_OLLAMA_MODEL = "<exact name from list>"
-  4. Run: python ollama_runner.py
+  1. Start Ollama in CPU mode (keep GPU free for YOLO training):
+       $env:OLLAMA_GPU_LAYERS = 0; ollama serve
+  2. Pull model: ollama pull qwen2.5-coder:14b
+  3. Optional: $env:AUTORESEARCH_OLLAMA_MODEL = "<exact name from ollama list>"
+  4. Preflight check: python ollama_runner.py --preflight
+  5. Run: python ollama_runner.py
      全程无交互，直到：达标连击 / 连续 discard 平台期 / 满 MAX_EXPERIMENTS / 你 Ctrl+C。
      若 Git push 弹窗打断：先配置凭据，或 PowerShell 临时跳过远程同步：
        $env:AUTORESEARCH_SKIP_PUSH="1"; python ollama_runner.py
@@ -38,7 +39,7 @@ from collections import deque
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 # main() 会用本机 /api/tags 校正为「ollama list」里的准确名称，减少 404。
-OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "gemma3:4b").strip() or "gemma3:4b"
+OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "qwen2.5-coder:14b").strip() or "qwen2.5-coder:14b"
 BRANCH = "autoresearch/crowd-win"
 MAX_EXPERIMENTS = 20
 COOLDOWN_SECONDS = 30        # Less than Mac (RTX 5070 has active cooling)
@@ -230,6 +231,125 @@ def query_ollama(prompt, temperature=0.7, max_tokens=4096):
     except Exception as e:
         print(f"ERROR: Ollama query failed: {e}")
         return None
+
+
+def unload_ollama_model():
+    """Ask Ollama to unload the model from VRAM before training."""
+    payload = json.dumps({
+        "model": OLLAMA_MODEL,
+        "keep_alive": 0,
+        "prompt": "",
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        OLLAMA_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+        print("  [INFO] Ollama model unloaded from VRAM")
+    except Exception:
+        pass  # Best effort
+
+
+# ══════════════════════════════════════════════════════════════
+# VRAM SAFETY — validate LLM-proposed config before training
+# ══════════════════════════════════════════════════════════════
+
+# Estimated peak VRAM (GB) for model+imgsz combos at batch=1, scaled by batch size
+_VRAM_ESTIMATES = {
+    # (model_keyword, imgsz) → approximate VRAM in GB at batch=8
+    ("yolov8n", 640): 2.0,
+    ("yolov8s", 640): 3.0,
+    ("yolov8s", 1280): 8.0,
+    ("yolo12n", 640): 2.5,
+    ("yolo12s", 640): 5.0,
+    ("yolo12s", 1280): 25.0,  # OVERFLOWS 12GB!
+    ("yolo12l", 640): 10.0,
+    ("yolo12l", 1280): 40.0,  # WAY over 12GB
+}
+
+GPU_VRAM_LIMIT_GB = 12.0
+
+
+def estimate_vram(model_str, imgsz, batch):
+    """Rough VRAM estimate. Returns (estimated_gb, safe)."""
+    model_lower = model_str.lower()
+    for key_model in ("yolo12l", "yolo12s", "yolo12n", "yolov8s", "yolov8n"):
+        if key_model in model_lower:
+            base = _VRAM_ESTIMATES.get((key_model, imgsz))
+            if base is None:
+                # Interpolate: VRAM roughly scales with imgsz^2
+                base640 = _VRAM_ESTIMATES.get((key_model, 640), 4.0)
+                base = base640 * (imgsz / 640) ** 2
+            # Scale by batch (rough: VRAM ~ batch * per-image activations)
+            estimated = base * (batch / 8)
+            return estimated, estimated < GPU_VRAM_LIMIT_GB
+    return None, True  # Unknown model, let it try
+
+
+def validate_train_config(train_content):
+    """Check if the current train.py config will fit in VRAM. Returns (ok, message)."""
+    model_match = re.search(r'^MODEL\s*=\s*["\'](.+?)["\']', train_content, re.MULTILINE)
+    imgsz_match = re.search(r'^IMGSZ\s*=\s*(\d+)', train_content, re.MULTILINE)
+    batch_match = re.search(r'^BATCH\s*=\s*(\d+)', train_content, re.MULTILINE)
+    copy_paste_match = re.search(r'^COPY_PASTE\s*=\s*([\d.]+)', train_content, re.MULTILINE)
+    mixup_match = re.search(r'^MIXUP\s*=\s*([\d.]+)', train_content, re.MULTILINE)
+
+    if not (model_match and imgsz_match and batch_match):
+        return True, "Could not parse config"
+
+    model = model_match.group(1)
+    imgsz = int(imgsz_match.group(1))
+    batch = int(batch_match.group(1))
+    copy_paste = float(copy_paste_match.group(1)) if copy_paste_match else 0.0
+    mixup = float(mixup_match.group(1)) if mixup_match else 0.0
+
+    est, safe = estimate_vram(model, imgsz, batch)
+
+    # Heavy augmentation (copy_paste/mixup > 0.2) roughly 1.5x VRAM
+    if copy_paste > 0.2 or mixup > 0.2:
+        if est:
+            est *= 1.5
+            safe = est < GPU_VRAM_LIMIT_GB
+
+    if est and not safe:
+        return False, (
+            f"VRAM UNSAFE: {model} imgsz={imgsz} batch={batch} "
+            f"(copy_paste={copy_paste}, mixup={mixup}) → ~{est:.1f}GB, "
+            f"exceeds {GPU_VRAM_LIMIT_GB}GB limit"
+        )
+    return True, f"VRAM OK: ~{est:.1f}GB" if est else "VRAM: unknown model, proceeding"
+
+
+def fix_unsafe_config(train_content):
+    """If config is VRAM-unsafe, downgrade to safe defaults and return fixed content."""
+    ok, msg = validate_train_config(train_content)
+    if ok:
+        return train_content, msg
+
+    print(f"  [VRAM GUARD] {msg}")
+    print(f"  [VRAM GUARD] Auto-fixing to safe defaults...")
+
+    # Apply safe defaults
+    fixes = {
+        "MODEL": '"person_dataset/yolov8s.pt"',
+        "IMGSZ": "640",
+        "BATCH": "16",
+        "COPY_PASTE": "0.1",
+        "MIXUP": "0.1",
+    }
+    for var, val in fixes.items():
+        train_content = re.sub(
+            rf'^{var}\s*=.*$', f'{var} = {val}',
+            train_content, count=1, flags=re.MULTILINE
+        )
+
+    ok2, msg2 = validate_train_config(train_content)
+    print(f"  [VRAM GUARD] After fix: {msg2}")
+    return train_content, msg2
 
 
 # ══════════════════════════════════════════════════════════════
@@ -558,11 +678,26 @@ def update_status(experiment_num, best_cds, best_commit, best_desc,
 # ══════════════════════════════════════════════════════════════
 
 def generate_experiment(experiment_num, current_config, results_history, suggestions):
-    prompt = f"""You are an autonomous ML researcher optimizing a YOLOv12 dense crowd detection model.
+    prompt = f"""You are an autonomous ML researcher optimizing a YOLO dense crowd detection model.
 Your goal: maximize CDS (Crowd Detection Score).
 
 Hardware: Windows, RTX 5070 12GB VRAM, 64GB RAM, i5-14600KF.
-Constraints: batch<=16 at imgsz=1280 (12GB VRAM), cache="ram".
+
+=== CRITICAL VRAM CONSTRAINTS (MUST OBEY) ===
+- GPU has ONLY 12GB VRAM. Exceeding this causes 10-15x slowdown (unified memory fallback).
+- VRAM budget table (approximate peak at batch=8):
+    yolov8n + 640  → ~2GB  ✓
+    yolov8s + 640  → ~3GB  ✓
+    yolov8s + 1280 → ~8GB  ✓ (safe with batch<=8)
+    yolo12n + 640  → ~2.5GB ✓
+    yolo12s + 640  → ~5GB  ✓
+    yolo12s + 1280 → ~25GB ✗ WILL OVERFLOW, DO NOT USE
+    yolo12l + ANY  → TOO LARGE, DO NOT USE
+- NEVER set COPY_PASTE > 0.2 or MIXUP > 0.2 — these nearly double VRAM usage.
+- Safe combos: yolov8s+1280+batch8, yolov8s+640+batch16, yolo12s+640+batch8
+- Model paths must use "person_dataset/" prefix, e.g. "person_dataset/yolov8s.pt"
+- Available models: person_dataset/yolov8n.pt, person_dataset/yolov8s.pt, person_dataset/yolo12n.pt, person_dataset/yolo12s.pt
+- Do NOT change DEVICE, DATA_YAML, CACHE, WORKERS, or anything below "TRAINING — do not modify"
 
 Current train.py config:
 {current_config}
@@ -574,14 +709,14 @@ Suggestions:
 {suggestions}
 
 This is experiment #{experiment_num}.
-Propose ONE specific change to train.py.
+Propose ONE specific change to train.py. Focus on what will improve CDS most.
 
-Respond EXACTLY in this format:
-DESCRIPTION: ...
+Respond EXACTLY in this format (no other text):
+DESCRIPTION: <what you're trying and why>
 VAR = value
 VAR2 = value
 
-Do not include extra text.
+Only include variables that CHANGE. Do not repeat unchanged variables.
 """
 
     response = query_ollama(prompt, temperature=0.7)
@@ -671,6 +806,19 @@ def main():
     print("\n" + "█" * 60)
     print("【阶段 1/2】运行基线训练（当前 train.py 配置）")
     print("█" * 60)
+
+    # 基线前验证 VRAM 安全
+    baseline_content = read_file(TRAIN_SCRIPT)
+    fixed_content, vram_msg = fix_unsafe_config(baseline_content)
+    if fixed_content != baseline_content:
+        with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+            f.write(fixed_content)
+        print(f"  [VRAM GUARD] 基线配置已自动修正")
+    else:
+        print(f"  [VRAM CHECK] {vram_msg}")
+
+    # 释放 Ollama 显存再训练
+    unload_ollama_model()
 
     success, metrics, duration = run_training()
     rolling_train_sec.append(duration)
@@ -767,11 +915,24 @@ def main():
             time.sleep(COOLDOWN_SECONDS)
             continue
 
+        # VRAM 安全检查：如果 LLM 提议的配置会溢出，自动降级
+        current_content = read_file(TRAIN_SCRIPT)
+        fixed_content, vram_msg = fix_unsafe_config(current_content)
+        if fixed_content != current_content:
+            with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+                f.write(fixed_content)
+            description += " [VRAM auto-fixed]"
+        else:
+            print(f"  [VRAM CHECK] {vram_msg}")
+
         # 提交修改
         commit_msg = f"exp{experiment_num}: {description}"
         rc, _, err = git_commit(commit_msg)
         if rc != 0:
             print(f"[WARN] Git commit 失败: {err}，但继续训练。")
+
+        # 训练前释放 Ollama 显存
+        unload_ollama_model()
 
         # 训练
         success, metrics, duration = run_training()
@@ -880,5 +1041,102 @@ def main():
     print("实验记录已保存至 results.tsv 与 status.md。")
 
 
+def preflight():
+    """Quick sanity check: Ollama connectivity, CUDA, dataset, 1-epoch train."""
+    global OLLAMA_MODEL
+    print("╔" + "═" * 58 + "╗")
+    print("║" + " " * 15 + "PREFLIGHT CHECK (预检)" + " " * 22 + "║")
+    print("╚" + "═" * 58 + "╝")
+
+    errors = []
+
+    # 1. Ollama connectivity
+    print("\n[1/5] Ollama 连接...")
+    OLLAMA_MODEL = resolve_ollama_model_name(OLLAMA_MODEL)
+    test = query_ollama("Reply with exactly: OK", max_tokens=10)
+    if test is None:
+        errors.append("Ollama 连接失败")
+        print("  ✗ 无法连接 Ollama")
+    else:
+        print(f"  ✓ Ollama 连接成功，模型: {OLLAMA_MODEL}")
+
+    # 2. LLM code generation test
+    print("\n[2/5] LLM 代码生成测试...")
+    code_test = query_ollama(
+        'You are a Python ML researcher. Reply with exactly:\nDESCRIPTION: test\nEPOCHS = 5',
+        max_tokens=50
+    )
+    if code_test and "EPOCHS" in code_test:
+        print(f"  ✓ LLM 能生成代码格式: {code_test.strip()[:80]}")
+    else:
+        errors.append("LLM 返回格式不正确")
+        print(f"  ✗ LLM 返回格式异常: {code_test!r}")
+
+    # 3. CUDA check
+    print("\n[3/5] CUDA / GPU 检查...")
+    try:
+        result = subprocess.run(
+            [PYTHON, "-c",
+             "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0), "
+             "f'{torch.cuda.get_device_properties(0).total_mem/1024**3:.1f}GB')"],
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace"
+        )
+        out = result.stdout.strip()
+        if "True" in out:
+            print(f"  ✓ CUDA 可用: {out}")
+        else:
+            errors.append("CUDA 不可用")
+            print(f"  ✗ CUDA 不可用: {out}")
+    except Exception as e:
+        errors.append(f"CUDA 检查失败: {e}")
+        print(f"  ✗ {e}")
+
+    # 4. Dataset & model check
+    print("\n[4/5] 数据集和模型文件...")
+    train_content = read_file(TRAIN_SCRIPT)
+    model_match = re.search(r'^MODEL\s*=\s*["\'](.+?)["\']', train_content, re.MULTILINE)
+    data_match = re.search(r'^DATA_YAML\s*=\s*["\'](.+?)["\']', train_content, re.MULTILINE)
+    if model_match:
+        model_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(TRAIN_SCRIPT)), model_match.group(1)))
+        if os.path.isfile(model_path):
+            size_mb = os.path.getsize(model_path) / 1024 / 1024
+            print(f"  ✓ 模型文件: {model_path} ({size_mb:.1f}MB)")
+        else:
+            errors.append(f"模型文件不存在: {model_path}")
+            print(f"  ✗ 模型文件不存在: {model_path}")
+    if data_match:
+        data_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(TRAIN_SCRIPT)), data_match.group(1)))
+        if os.path.isfile(data_path):
+            print(f"  ✓ 数据配置: {data_path}")
+        else:
+            errors.append(f"数据配置不存在: {data_path}")
+            print(f"  ✗ 数据配置不存在: {data_path}")
+
+    # VRAM estimate
+    ok, vram_msg = validate_train_config(train_content)
+    if ok:
+        print(f"  ✓ {vram_msg}")
+    else:
+        errors.append(vram_msg)
+        print(f"  ✗ {vram_msg}")
+
+    # 5. Summary
+    print("\n" + "═" * 60)
+    if errors:
+        print(f"预检发现 {len(errors)} 个问题:")
+        for e in errors:
+            print(f"  ✗ {e}")
+        print("\n请修复后重试。")
+    else:
+        print("✓ 预检全部通过！可以运行: python ollama_runner.py")
+        print("\n建议启动方式（Ollama 用 CPU 推理，不占显存）:")
+        print('  $env:OLLAMA_GPU_LAYERS = 0; ollama serve  # 终端 1')
+        print('  python ollama_runner.py                    # 终端 2')
+    print("═" * 60)
+
+
 if __name__ == "__main__":
-    main()
+    if "--preflight" in sys.argv:
+        preflight()
+    else:
+        main()

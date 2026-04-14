@@ -6,7 +6,7 @@
 - **RAM**: 64GB DDR4-3200
 - **CPU**: Intel i5-14600KF (14 cores, 20 threads)
 - **Storage**: 1TB NVMe SSD
-- **Agent**: Ollama（本地）；默认 **gemma3:4b**，可选 `AUTORESEARCH_OLLAMA_MODEL=qwen2.5-coder:14b`
+- **Agent**: Ollama（本地）；默认 **qwen2.5-coder:14b**（代码生成专用，推荐）
 
 ## Quick Start
 
@@ -24,13 +24,16 @@ pip install -r requirements.txt
 #    预训练权重示例: person_dataset/yolo12s.pt、yolo12n.pt、yolo12l.pt、yolov8n.pt
 #    大文件已被 .gitignore 排除，勿 commit/push。
 
-# 4. Start Ollama
+# 4. Start Ollama (CPU mode — keep GPU free for YOLO training)
+$env:OLLAMA_GPU_LAYERS = 0
 ollama serve
 # (in another terminal)
-ollama pull gemma3:4b
-# 可选更强代码模型: ollama pull qwen2.5-coder:14b  且 $env:AUTORESEARCH_OLLAMA_MODEL="qwen2.5-coder:14b"
+ollama pull qwen2.5-coder:14b
 
-# 5. Run the autonomous experiment loop
+# 5. Preflight check (verify everything works, ~2 min)
+python ollama_runner.py --preflight
+
+# 6. Run the autonomous experiment loop
 python ollama_runner.py
 ```
 
@@ -41,7 +44,7 @@ python ollama_runner.py
 1. Connects to Ollama (localhost:11434)
 2. Reads this file, results.tsv, suggestions.md for context
 3. Runs baseline (no changes to train.py)
-4. Asks the selected Ollama model (default gemma3:4b) to propose train.py modifications
+4. Asks qwen2.5-coder:14b (via Ollama CPU inference) to propose train.py modifications
 5. Applies changes, git commits, trains, evaluates
 6. Keep (push) or discard (reset) based on CDS improvement
 7. Repeats until stop condition met
@@ -84,11 +87,26 @@ Higher is better. Quality gates: precision ≥ 0.90, recall ≥ 0.85, and mean t
 | Parameter | Value | Reason |
 |-----------|-------|--------|
 | DEVICE | 0 (CUDA) | RTX 5070 |
-| BATCH | 16 | 12GB VRAM handles batch=16 at imgsz=1280 |
-| CACHE | False (default) | 避免 Windows 下 ram cache + 多进程 dataloader 导致 MemoryError；内存充裕可试 `"ram"` |
-| WORKERS | 2 (default) | 降低 spawn 子进程峰值；机器吃满再逐步提高 |
-| IMGSZ | 1280 | Full resolution, no compromise needed |
+| BATCH | 16 | yolov8s+640 在 12GB 内安全 |
+| CACHE | "ram" | 64GB RAM 足够缓存数据集 |
+| WORKERS | 8 | i5-14600KF 14 核 |
+| IMGSZ | 640 | 安全起步；稳定后可升 1280（见 VRAM 预算表） |
 | AMP | True | RTX 5070 has fast FP16 |
+
+## VRAM 预算表（RTX 5070 12GB 硬限制）
+
+| 模型 | imgsz | batch=8 VRAM | batch=16 VRAM | 安全？ |
+|------|-------|-------------|--------------|--------|
+| yolov8n | 640 | ~2GB | ~4GB | ✓ |
+| yolov8s | 640 | ~3GB | ~6GB | ✓ |
+| **yolov8s** | **1280** | **~8GB** | ~16GB(溢出) | batch≤8 |
+| yolo12n | 640 | ~2.5GB | ~5GB | ✓ |
+| yolo12s | 640 | ~5GB | ~10GB | batch≤8 |
+| yolo12s | 1280 | **~25GB** | 溢出 | ✗ 禁用 |
+| yolo12l | any | >10GB | 溢出 | ✗ 禁用 |
+
+**注意**：copy_paste>0.2 或 mixup>0.2 会使 VRAM 增加约 50%。
+`ollama_runner.py` 内置 VRAM 安全检查，超限配置会被自动降级。
 
 ## Stop Conditions
 
@@ -97,7 +115,7 @@ Higher is better. Quality gates: precision ≥ 0.90, recall ≥ 0.85, and mean t
 | 3 consecutive keeps with [TARGET_MET] | Target achieved → stop, push |
 | 5 consecutive discards | Plateau → stop, write analysis |
 | 20 experiments | Session cap → stop, summarize |
-| Training > 60 minutes | Kill, treat as crash |
+| Training > 4 hours | Kill, treat as crash |
 
 ## Monitoring Progress
 
@@ -121,8 +139,8 @@ powershell -c "Get-Content run.log -Tail 20"  # Current training progress
 
 Ollama 每轮只改 **一个** 明确假设；优先从上到下（先大方向、再细调），避免同一轮堆多项大改。
 
-1. **模型体量**：`person_dataset/yolo12n.pt` → `yolo12s.pt` →（显存允许再）`yolo12l.pt` / `yolov8s`；`MODEL` 必须带 `person_dataset/` 前缀。
-2. **Batch 与显存**：在 `imgsz=1280` 下从 `BATCH=16` 起，仅当训练稳定且 VRAM 有余再试 20–24；OOM 则降 batch，不要同时加大模型。`yolo12l` + 12GB 可试 batch=8。
+1. **模型体量**：先用 `person_dataset/yolov8s.pt`+640 建立 baseline → 升 1280(batch≤8) → 试 `yolo12s.pt`+640(batch≤8)。**禁止** yolo12s+1280 或 yolo12l（VRAM 溢出）。
+2. **Batch 与显存**：参考 VRAM 预算表。yolov8s+640 可用 batch=16；yolov8s+1280 限 batch≤8；yolo12s+640 限 batch≤8。
 3. **学习率与 schedule**：`LR0` / `LRF` / `cos_lr` 小幅调整；一次只改一类。
 4. **增强（单项）**：`mosaic`、`mixup`、`copy_paste`、`erasing` 等 **每次只动一两个参数**，便于归因。
 5. **Loss**：`box` / `cls` 权重微调。
