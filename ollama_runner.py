@@ -198,7 +198,7 @@ def check_vram_safety():
 def force_safe_config():
     """Reset to safe defaults."""
     content = read_file(TRAIN_SCRIPT)
-    fixes = {"MODEL": '"person_dataset/yolov8s.pt"', "IMGSZ": "640", "BATCH": "16",
+    fixes = {"MODEL": '"person_dataset/yolo12s.pt"', "IMGSZ": "640", "BATCH": "16",
              "COPY_PASTE": "0.1", "MIXUP": "0.1"}
     for var, val in fixes.items():
         content = re.sub(rf'^{var}\s*=.*$', f'{var} = {val}', content, count=1, flags=re.MULTILINE)
