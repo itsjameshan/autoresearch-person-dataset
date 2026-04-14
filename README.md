@@ -117,7 +117,7 @@ powershell -c "Get-Content run.log -Tail 20"
 | CPU | i5-14600KF 14 核 |
 | batch | 16, imgsz=1280 |
 | cache | "ram"（64GB 可以全部缓存） |
-| Agent | Ollama + qwen2.5-coder:14b（本地，无需云端） |
+| Agent | Ollama + gemma3:4b（本地，无需云端） |
 | 每轮耗时 | ~5-10 分钟 |
 | 冷却时间 | 30 秒（主动散热） |
 
@@ -170,7 +170,7 @@ git clone git@github.com:itsjameshan/autoresearch-person-dataset.git
 cd autoresearch-person-dataset
 git checkout autoresearch/crowd-win
 setup_windows.bat
-# 另一个终端: ollama serve && ollama pull qwen2.5-coder:14b
+# 另一个终端: ollama serve && ollama pull gemma3:4b
 python ollama_runner.py
 ```
 
@@ -197,6 +197,6 @@ python ollama_runner.py
 | 检测模型 | YOLOv8s / YOLOv12n/s/l (Ultralytics) |
 | 训练框架 | Ultralytics YOLO |
 | Mac Agent | Claude Code (Opus 4.6) |
-| Windows Agent | Ollama + qwen2.5-coder:14b |
+| Windows Agent | Ollama + gemma3:4b |
 | 版本管理 | Git（实验状态机） |
 | 评估指标 | CDS（自定义复合指标） |

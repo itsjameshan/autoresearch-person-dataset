@@ -2,7 +2,7 @@
 ollama_runner.py — Autonomous experiment loop driven by Ollama (local LLM).
 
 Replaces Claude Code for machines without cloud AI access.
-Uses qwen2.5-coder:14b via Ollama for code generation.
+Uses gemma3:4b via Ollama for code generation.
 
 Each experiment runs for a FIXED 5-MINUTE TIME BUDGET.
 Expected throughput: ~12 experiments/hour, ~100 overnight.
@@ -10,7 +10,7 @@ Expected throughput: ~12 experiments/hour, ~100 overnight.
 Usage:
   1. Start Ollama (CPU mode — keep GPU free for YOLO):
        $env:OLLAMA_GPU_LAYERS = 0; ollama serve
-  2. Pull model: ollama pull qwen2.5-coder:14b
+  2. Pull model: ollama pull gemma3:4b
   3. Run: python ollama_runner.py
        Ctrl+C to stop gracefully.
 
@@ -36,7 +36,7 @@ import threading
 # ══════════════════════════════════════════════════════════════
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "qwen2.5-coder:14b").strip() or "qwen2.5-coder:14b"
+OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "gemma3:4b").strip() or "gemma3:4b"
 BRANCH = "autoresearch/crowd-win"
 
 # Time budget: each experiment ~5 min training + ~2 min eval overhead = ~7 min total

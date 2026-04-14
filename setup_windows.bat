@@ -34,11 +34,11 @@ if errorlevel 1 (
     echo Download from: https://ollama.com/download
     echo After installing, run:
     echo   ollama serve
-    echo   ollama pull qwen2.5-coder:14b
+    echo   ollama pull gemma3:4b
     echo.
 ) else (
     echo Pulling Ollama model...
-    ollama pull qwen2.5-coder:14b
+    ollama pull gemma3:4b
 )
 
 REM Check dataset (repo: person_dataset\images\train)

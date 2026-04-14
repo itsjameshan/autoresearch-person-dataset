@@ -5,7 +5,7 @@
 - **GPU**: NVIDIA RTX 5070 12GB VRAM (CUDA)
 - **RAM**: 64GB DDR4-3200
 - **CPU**: Intel i5-14600KF (14 cores, 20 threads)
-- **Agent**: Ollama + qwen2.5-coder:14b (local, no cloud)
+- **Agent**: Ollama + gemma3:4b (local, no cloud)
 
 ## Quick Start
 
@@ -14,7 +14,7 @@
 $env:OLLAMA_GPU_LAYERS = 0; ollama serve
 
 # 2. (another terminal) Verify model
-ollama list  # should show qwen2.5-coder:14b
+ollama list  # should show gemma3:4b
 
 # 3. Preflight
 python ollama_runner.py --preflight
