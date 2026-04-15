@@ -32,40 +32,40 @@ from evaluate import evaluate_model, print_metrics
 # Model — use repo-relative path with person_dataset/ prefix
 # Available: person_dataset/yolov8n.pt, yolov8s.pt, yolo12n.pt, yolo12s.pt
 # VRAM budget (12GB limit): yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB
-MODEL = "person_dataset/yolo12s.pt"
+MODEL = "person_dataset/yolo12l.pt"
 
 # Dataset
 DATA_YAML = "person_dataset/person.yaml"
-IMGSZ = 640
+IMGSZ = 1280
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
-TIME_MINUTES = 5    # Ultralytics time= parameter (in hours internally)
-BATCH = 16
-DEVICE = 0          # CUDA GPU 0
+TIME_MINUTES = 5
+BATCH = 4
+DEVICE = 0
 
 # Learning rate
-LR0 = 0.01
-LRF = 0.01
+LR0=0.001
+LRF=0.01
 COS_LR = True
 
 # Data augmentation
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
-DEGREES = 5.0
-TRANSLATE = 0.1
-SCALE = 0.5
+DEGREES=10.0
+TRANSLATE=0.2
+SCALE=0.6
 FLIPUD = 0.5
 FLIPLR = 0.5
-MOSAIC = 1.0
-MIXUP = 0.1
-COPY_PASTE = 0.1
+MOSAIC=0.7
+MIXUP=0.3
+COPY_PASTE=0.2
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
 # Loss weights
-BOX = 7.5
-CLS = 0.5
+BOX=8.0
+CLS=0.5
 
 # Other
 AMP = True

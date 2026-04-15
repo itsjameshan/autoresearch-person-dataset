@@ -1,23 +1,9 @@
 """
-ollama_runner.py — Autonomous experiment loop driven by Ollama (local LLM).
-
-Replaces Claude Code for machines without cloud AI access.
-Uses gemma3:4b via Ollama for code generation.
-
-Each experiment runs for a FIXED 5-MINUTE TIME BUDGET.
-Expected throughput: ~12 experiments/hour, ~100 overnight.
-
-Usage:
-  1. Start Ollama (CPU mode — keep GPU free for YOLO):
-       $env:OLLAMA_GPU_LAYERS = 0; ollama serve
-  2. Pull model: ollama pull gemma3:4b
-  3. Run: python ollama_runner.py
-       Ctrl+C to stop gracefully.
-
-Git workflow:
-  - modify train.py → commit → train (5 min) → evaluate → keep/discard
-  - keep: commit stays, branch advances
-  - discard: git reset --hard HEAD~1, revert to best
+ollama_runner.py — YOLO12l 专用自动优化
+固定：YOLO12l + 1280尺寸 + batch=4 + qwen2.5-coder:7b
+自动停止：达到指标阈值 / 30轮 / 5轮不提升
+自动保存最优模型权重
+最终自动保存【效果最好的一轮】权重到 best_final_model
 """
 
 import os
@@ -30,54 +16,34 @@ import datetime
 import urllib.request
 import urllib.error
 import threading
+import shutil
 
 # ══════════════════════════════════════════════════════════════
-# CONFIG
+# 固定配置（按你的硬件与需求）
 # ══════════════════════════════════════════════════════════════
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = os.environ.get("AUTORESEARCH_OLLAMA_MODEL", "gemma3:4b").strip() or "gemma3:4b"
+OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
 BRANCH = "autoresearch/crowd-win"
 
-# Time budget: each experiment ~5 min training + ~2 min eval overhead = ~7 min total
-# Kill at 10 min to prevent hangs
-TRAIN_TIMEOUT = 600  # 10 minutes hard kill
-
+TRAIN_TIMEOUT = 600
 PYTHON = sys.executable
 TRAIN_SCRIPT = "train.py"
 RUN_LOG = "run.log"
 RESULTS_TSV = "results.tsv"
 STATUS_MD = "status.md"
-SUGGESTIONS_MD = "suggestions.md"
-COOLDOWN_SECONDS = 10
 
+BEST_PT_DIR = "best_model"
+FINAL_BEST_DIR = "best_final_model"  # 最终最优模型单独保存
+
+MAX_EXPERIMENTS = 300
+MAX_NO_IMPROVE = 10
+STOP_CDS = 0.95
+STOP_MAP50 = 0.92
 
 # ══════════════════════════════════════════════════════════════
-# OLLAMA
+# OLLAMA 交互
 # ══════════════════════════════════════════════════════════════
-
-def resolve_model():
-    """Match requested model name against ollama list."""
-    global OLLAMA_MODEL
-    try:
-        req = urllib.request.Request("http://localhost:11434/api/tags")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            names = [m["name"] for m in json.loads(resp.read().decode())["models"]]
-    except Exception:
-        return
-
-    if OLLAMA_MODEL in names:
-        return
-
-    base = OLLAMA_MODEL.split(":")[0]
-    for n in names:
-        if n.startswith(base):
-            print(f"[INFO] Model aligned: {OLLAMA_MODEL!r} → {n!r}")
-            OLLAMA_MODEL = n
-            return
-
-    print(f"[WARN] {OLLAMA_MODEL!r} not found in ollama. Available: {names}")
-
 
 def query_ollama(prompt, temperature=0.7, max_tokens=4096):
     payload = json.dumps({
@@ -94,125 +60,81 @@ def query_ollama(prompt, temperature=0.7, max_tokens=4096):
         print(f"[ERROR] Ollama: {e}")
         return None
 
-
 def unload_model():
-    """Release Ollama VRAM before training."""
     try:
-        payload = json.dumps({"model": OLLAMA_MODEL, "keep_alive": 0, "prompt": "", "stream": False}).encode()
-        req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=30).read()
-    except Exception:
+        payload = json.dumps({"model": OLLAMA_MODEL, "keep_alive": 0}).encode()
+        urllib.request.urlopen(urllib.request.Request(OLLAMA_URL, data=payload), timeout=10).read()
+    except:
         pass
 
-
 # ══════════════════════════════════════════════════════════════
-# GIT
+# Git 操作
 # ══════════════════════════════════════════════════════════════
 
 def git(*args):
-    r = subprocess.run(["git"] + list(args), capture_output=True, text=True, timeout=30,
-                       encoding="utf-8", errors="replace")
+    r = subprocess.run(["git"] + list(args), capture_output=True, text=True, timeout=20)
     return r.returncode, r.stdout.strip(), r.stderr.strip()
-
 
 def git_commit(msg):
     git("add", TRAIN_SCRIPT)
     return git("commit", "-m", msg)
 
-
-def git_push():
-    if os.environ.get("AUTORESEARCH_SKIP_PUSH", "").strip() in ("1", "true"):
-        return 0, "", ""
-    return git("push", "origin", BRANCH)
-
-
 def git_short_hash():
     _, out, _ = git("rev-parse", "--short", "HEAD")
     return out
 
-
 # ══════════════════════════════════════════════════════════════
-# FILE OPS
+# 文件操作
 # ══════════════════════════════════════════════════════════════
 
 def read_file(path):
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return f.read()
     return ""
 
-
-def read_train_config():
-    content = read_file(TRAIN_SCRIPT)
-    m = re.search(r"# EXPERIMENT CONFIG.*?# TRAINING — do not modify", content, re.DOTALL)
-    return m.group(0) if m else content[:2000]
-
-
 def apply_changes(config_block):
-    """Apply LLM-proposed variable assignments to train.py."""
     content = read_file(TRAIN_SCRIPT)
-    valid = [
-        "MODEL", "IMGSZ", "TIME_MINUTES", "BATCH", "DEVICE",
-        "LR0", "LRF", "COS_LR", "HSV_H", "HSV_S", "HSV_V",
-        "DEGREES", "TRANSLATE", "SCALE", "FLIPUD", "FLIPLR",
-        "MOSAIC", "MIXUP", "COPY_PASTE", "ERASING", "CLOSE_MOSAIC",
-        "BOX", "CLS", "AMP", "CACHE", "WORKERS", "SINGLE_CLS",
+    valid_params = [
+        "LR0", "LRF", "MOSAIC", "MIXUP", "COPY_PASTE",
+        "DEGREES", "TRANSLATE", "SCALE", "BOX", "CLS",
+        "CONF", "IOU"  # 增加置信度 & NMS 优化
     ]
+    changes_made = []
     for line in config_block.split("\n"):
         line = line.strip().replace("`", "")
-        if not line or line.startswith("#"):
-            continue
-        for var in valid:
-            if re.match(rf'^{var}\s*=', line):
-                content = re.sub(rf'^{var}\s*=.*$', line, content, count=1, flags=re.MULTILINE)
-                break
+        for param in valid_params:
+            if re.match(rf"^{param}\s*=", line):
+                content = re.sub(rf"^{param}\s*=.*", line, content, flags=re.MULTILINE)
+                changes_made.append(line)
+    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+        f.write(content)
+    return changes_made
+
+# ══════════════════════════════════════════════════════════════
+# 强制 YOLO12l + 1280 + batch=4
+# ══════════════════════════════════════════════════════════════
+
+def force_yolo12l_config():
+    content = read_file(TRAIN_SCRIPT)
+    fixed_config = {
+        "MODEL": '"person_dataset/yolo12l.pt"',
+        "IMGSZ": "1280",
+        "BATCH": "4",
+        "TIME_MINUTES": "5",
+        "DEVICE": "0",
+        "SINGLE_CLS": "True"
+    }
+    for key, value in fixed_config.items():
+        content = re.sub(rf"^{key}\s*=.*", f"{key} = {value}", content, flags=re.MULTILINE)
     with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
         f.write(content)
 
-
 # ══════════════════════════════════════════════════════════════
-# VRAM SAFETY
-# ══════════════════════════════════════════════════════════════
-
-def check_vram_safety():
-    """Check if current train.py config will fit in 12GB VRAM."""
-    content = read_file(TRAIN_SCRIPT)
-    model = re.search(r'^MODEL\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
-    imgsz = re.search(r'^IMGSZ\s*=\s*(\d+)', content, re.MULTILINE)
-    batch = re.search(r'^BATCH\s*=\s*(\d+)', content, re.MULTILINE)
-    if not (model and imgsz and batch):
-        return True
-    m, i, b = model.group(1).lower(), int(imgsz.group(1)), int(batch.group(1))
-    # Block known-bad combos
-    if "12l" in m:
-        return False
-    if "12s" in m and i > 640:
-        return False
-    if "12s" in m and b > 8:
-        return False
-    if i >= 1280 and b > 8:
-        return False
-    return True
-
-
-def force_safe_config():
-    """Reset to safe defaults."""
-    content = read_file(TRAIN_SCRIPT)
-    fixes = {"MODEL": '"person_dataset/yolo12s.pt"', "IMGSZ": "640", "BATCH": "16",
-             "COPY_PASTE": "0.1", "MIXUP": "0.1"}
-    for var, val in fixes.items():
-        content = re.sub(rf'^{var}\s*=.*$', f'{var} = {val}', content, count=1, flags=re.MULTILINE)
-    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
-        f.write(content)
-    print("  [VRAM GUARD] Config reset to safe defaults")
-
-
-# ══════════════════════════════════════════════════════════════
-# TRAINING
+# 训练执行（日志追加，不覆盖）
 # ══════════════════════════════════════════════════════════════
 
-def run_training():
-    """Run train.py with streaming output. Returns (success, duration_sec)."""
+def run_training(exp_num):
     t0 = time.time()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -220,324 +142,201 @@ def run_training():
     proc = subprocess.Popen(
         [PYTHON, "-u", TRAIN_SCRIPT],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env=env, text=True, bufsize=1, encoding="utf-8", errors="replace",
+        env=env, text=True, bufsize=1, encoding="utf-8", errors="replace"
     )
 
-    killed = {"v": False}
-    def _watchdog():
+    def watchdog():
         time.sleep(TRAIN_TIMEOUT)
         if proc.poll() is None:
             proc.kill()
-            killed["v"] = True
-    threading.Thread(target=_watchdog, daemon=True).start()
+    threading.Thread(target=watchdog, daemon=True).start()
 
-    with open(RUN_LOG, "w", encoding="utf-8") as log:
-        for line in (proc.stdout or []):
-            log.write(line)
-            log.flush()
-            s = line.rstrip()
-            # Stream every line to terminal in real time and keep run.log for parsing.
-            print(f"  | {s}")
+    with open(RUN_LOG, "a", encoding="utf-8") as log_file:
+        log_file.write(f"\n{'='*80}\n")
+        log_file.write(f"EXPERIMENT {exp_num} START | {time.ctime()}\n")
+        log_file.write(f"{'='*80}\n")
+        log_file.flush()
+        for line in proc.stdout:
+            log_file.write(line)
+            log_file.flush()
+            print(f"  | {line.rstrip()}")
     proc.wait()
-
-    dur = time.time() - t0
-    if killed["v"]:
-        print(f"  [TIMEOUT] Training killed after {TRAIN_TIMEOUT}s")
-        return False, dur
-    return proc.returncode == 0, dur
-
-
-def parse_metrics():
-    """Parse structured metrics from run.log (after '---' delimiter)."""
-    content = read_file(RUN_LOG)
-    metrics = {}
-    in_metrics = False
-    for line in content.split("\n"):
-        line = line.strip()
-        if line == "---":
-            in_metrics = True
-            continue
-        if in_metrics and ":" in line:
-            k, _, v = line.partition(":")
-            metrics[k.strip()] = v.strip()
-    return metrics
-
+    return proc.returncode == 0, time.time() - t0
 
 # ══════════════════════════════════════════════════════════════
-# RESULTS
+# 解析指标（含 Recall / Precision / mAP50）
+# ══════════════════════════════════════════════════════════════
+
+def parse_metrics():
+    log = read_file(RUN_LOG)
+    metrics = {"cds":0.0, "mAP50":0.0, "Recall":0.0, "Precision":0.0}
+    for key in metrics:
+        match = re.search(rf"{key}\s*[:=]\s*([0-9\.]+)", log)
+        if match:
+            metrics[key] = float(match.group(1))
+    return metrics
+
+# ══════════════════════════════════════════════════════════════
+# 保存最优权重
+# ══════════════════════════════════════════════════════════════
+
+def save_best_weights():
+    os.makedirs(BEST_PT_DIR, exist_ok=True)
+    for root, dirs, files in os.walk("autoresearch_runs/current/weights"):
+        if "best.pt" in files:
+            src = os.path.join(root, "best.pt")
+            dst = os.path.join(BEST_PT_DIR, "best.pt")
+            shutil.copy2(src, dst)
+            print(f"✅ 最优权重保存：{dst}")
+            return
+
+# ══════════════════════════════════════════════════════════════
+# 【新增】最终保存全局最优模型
+# ══════════════════════════════════════════════════════════════
+
+def save_final_best_model():
+    os.makedirs(FINAL_BEST_DIR, exist_ok=True)
+    src = os.path.join(BEST_PT_DIR, "best.pt")
+    dst = os.path.join(FINAL_BEST_DIR, "best.pt")
+    if os.path.exists(src):
+        shutil.copy2(src, dst)
+        print(f"\n🎉 【最终全局最优模型已保存】：{dst}")
+        print(f"📁 路径：best_final_model/best.pt")
+    else:
+        print("\n❌ 未找到最优模型")
+
+# ══════════════════════════════════════════════════════════════
+# 记录结果
 # ══════════════════════════════════════════════════════════════
 
 def init_results():
     if not os.path.exists(RESULTS_TSV):
         with open(RESULTS_TSV, "w", encoding="utf-8") as f:
-            f.write(
-                "commit\tcds\tmAP50\tmAP50_95\tsmall_obj_recall\tprecision\trecall\t"
-                "counting_mae\tinference_ms\tlatency_score\tmemory_gb\tepochs\tstatus\tdescription\n"
-            )
+            f.write("exp_num\tcds\tmAP50\tRecall\tPrecision\tstatus\toptimized_params\n")
 
-
-def log_result(commit, metrics, status, desc):
-    cds = metrics.get("cds", "0.0000")
-    mAP50 = metrics.get("mAP50", "0.0000")
-    mAP50_95 = metrics.get("mAP50_95", "0.0000")
-    small_obj = metrics.get("small_obj_recall", "0.0000")
-    prec = metrics.get("precision", "0.0000")
-    rec = metrics.get("recall", "0.0000")
-    counting_mae = metrics.get("counting_mae", "0.0000")
-    inference_ms = metrics.get("inference_ms", "0.0")
-    latency_score = metrics.get("latency_score", "0.0000")
-    epochs = metrics.get("epochs_completed", "0")
-    mem = metrics.get("peak_memory_mb", "0")
-    try:
-        mem_gb = f"{float(mem)/1024:.1f}"
-    except (ValueError, TypeError):
-        mem_gb = "0.0"
-    row = (
-        f"{commit}\t{cds}\t{mAP50}\t{mAP50_95}\t{small_obj}\t{prec}\t{rec}\t"
-        f"{counting_mae}\t{inference_ms}\t{latency_score}\t{mem_gb}\t{epochs}\t{status}\t{desc}\n"
-    )
+def log_experiment_result(exp_num, m, status, params):
+    p = " | ".join(params) if params else "none"
     with open(RESULTS_TSV, "a", encoding="utf-8") as f:
-        f.write(row)
-
-
-def update_status(exp_num, best_cds, best_commit, best_desc, last_exps):
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    table = ""
-    for e in last_exps[-5:]:
-        table += f"| {e['num']} | {e['cds']} | {e['status']} | {e['desc'][:60]} |\n"
-    content = f"""# Autoresearch Status
-
-## Session Info
-- Updated: {now}
-- Branch: {BRANCH}
-- Total experiments: {exp_num}
-- Platform: Windows / RTX 5070 12GB / Ollama {OLLAMA_MODEL}
-- Time budget: 5 min/experiment
-
-## Current Best
-- CDS: {best_cds:.4f} (commit: {best_commit})
-- Description: {best_desc}
-
-## Last 5 Experiments
-| # | CDS | Status | Description |
-|---|-----|--------|-------------|
-{table}"""
-    with open(STATUS_MD, "w", encoding="utf-8") as f:
-        f.write(content)
-
+        f.write(f"{exp_num}\t{m['cds']:.4f}\t{m['mAP50']:.4f}\t{m['Recall']:.4f}\t{m['Precision']:.4f}\t{status}\t{p}\n")
 
 # ══════════════════════════════════════════════════════════════
-# LLM EXPERIMENT GENERATION
+# LLM生成优化（含 conf / iou 优化）
 # ══════════════════════════════════════════════════════════════
 
-def generate_experiment(exp_num, config, history, suggestions):
-    prompt = f"""You are an autonomous ML researcher optimizing YOLO for dense crowd detection.
-Goal: maximize CDS (Crowd Detection Score). Higher is better.
+def generate_optimization(exp_num, current_config, history):
+    prompt = f"""你是专业YOLO12l调参专家，专注体育场观众计数。
+优化目标：
+1. 高mAP50
+2. 高Recall（不漏检）
+3. 高Precision（不误检）
+4. 最优置信度CONF & 最优NMS_IOU
+只输出参数，不要多余内容。
+允许优化：LR0,LRF,MOSAIC,MIXUP,COPY_PASTE,DEGREES,TRANSLATE,SCALE,BOX,CLS,CONF,IOU
+严禁修改：MODEL,IMGSZ,BATCH,DEVICE,TIME_MINUTES
 
-Hardware: RTX 5070 12GB VRAM, 64GB RAM. Each experiment has a FIXED 5-MINUTE time budget.
+当前参数：
+{current_config}
 
-=== VRAM CONSTRAINTS (MUST OBEY) ===
-- 12GB VRAM limit. Exceeding causes 10x slowdown.
-- Safe: yolov8s+640+batch16, yolov8s+1280+batch8, yolo12s+640+batch8
-- UNSAFE (BANNED): yolo12s+1280, yolo12l, copy_paste>0.2, mixup>0.2
-- Model paths: "person_dataset/yolov8s.pt", "person_dataset/yolo12s.pt", etc.
-- Do NOT change DEVICE, DATA_YAML, CACHE, WORKERS, TIME_MINUTES
-
-Current train.py config:
-{config}
-
-Experiment history (most recent last):
+历史结果：
 {history}
 
-Suggestions:
-{suggestions}
-
-Experiment #{exp_num}. Propose ONE focused change. Think about what will improve CDS the most.
-
-Reply EXACTLY:
-DESCRIPTION: <what and why, one line>
-VAR = value
+输出格式：
+DESCRIPTION: ...
+参数=值
 """
-    resp = query_ollama(prompt, temperature=0.7)
-    if not resp:
+    res = query_ollama(prompt, temperature=0.6)
+    if not res:
         return None, None
-
     desc = ""
-    config_lines = []
-    for line in resp.strip().split("\n"):
+    lines = []
+    for line in res.split("\n"):
         line = line.strip()
         if line.startswith("DESCRIPTION:"):
             desc = line.replace("DESCRIPTION:", "").strip()
-        elif re.match(r'^[A-Z_0-9]+\s*=', line):
-            config_lines.append(line.replace("`", ""))
-    return desc or f"experiment {exp_num}", "\n".join(config_lines)
-
+        elif "=" in line and not line.startswith("#"):
+            lines.append(line.replace("`", ""))
+    return desc or f"Exp {exp_num}", "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════
-# MAIN LOOP
+# 主循环
 # ══════════════════════════════════════════════════════════════
 
 def main():
-    global OLLAMA_MODEL
-    print("=" * 60)
-    print(" AUTORESEARCH — 5-min time budget, Ollama-driven")
-    print(f" Model: {OLLAMA_MODEL} | Branch: {BRANCH}")
-    print("=" * 60)
+    print("=" * 80)
+    print("YOLO12l 自动调参训练系统 | 最优置信度+NMS | 不漏检不误检")
+    print("最终最优模型将保存到：best_final_model/best.pt")
+    print("=" * 80)
 
-    # Resolve Ollama model name
-    resolve_model()
-    test = query_ollama("Say OK", max_tokens=10)
-    if test is None:
-        print("[FATAL] Cannot connect to Ollama. Exiting.")
-        sys.exit(1)
-    print(f"[OK] Ollama connected: {OLLAMA_MODEL}")
-
-    # Git setup
-    git("checkout", BRANCH)
+    force_yolo12l_config()
     init_results()
-    suggestions = read_file(SUGGESTIONS_MD)
 
-    # State
-    best_cds = -1.0
-    best_commit = ""
-    best_desc = ""
-    last_exps = []
-    session_start = time.time()
+    best = {"cds":0.0, "mAP50":0.0, "Recall":0.0, "Precision":0.0}
+    no_improve = 0
+    exp = 0
 
-    # ── Baseline (experiment #0) ──
-    print("\n>>> BASELINE (no modifications) <<<")
-    unload_model()
-    if not check_vram_safety():
-        force_safe_config()
+    try:
+        while exp < MAX_EXPERIMENTS:
+            exp += 1
+            print(f"\n【第 {exp}/{MAX_EXPERIMENTS} 轮】")
+            print(f"最佳：CDS={best['cds']:.4f} | mAP50={best['mAP50']:.4f} | Recall={best['Recall']:.4f} | Precision={best['Precision']:.4f}")
 
-    git_commit("baseline")
-    success, dur = run_training()
-    commit = git_short_hash()
+            current = read_file(TRAIN_SCRIPT)
+            history = read_file(RESULTS_TSV)
+            desc, changes = generate_optimization(exp, current, history)
 
-    if success:
-        metrics = parse_metrics()
-        cds = float(metrics.get("cds", 0))
-        best_cds, best_commit, best_desc = cds, commit, "baseline"
-        log_result(commit, metrics, "keep", "baseline")
-        last_exps.append({"num": 0, "cds": f"{cds:.4f}", "status": "keep", "desc": "baseline"})
-        git("add", RESULTS_TSV, STATUS_MD)
-        git("commit", "--amend", "--no-edit")
-        git_push()
-        print(f"\n>>> BASELINE CDS: {cds:.4f} ({dur:.0f}s) <<<")
-    else:
-        print("[FATAL] Baseline failed. Check train.py and environment.")
-        log_result(commit, {}, "crash", "baseline crash")
-        sys.exit(1)
-
-    # ── Experiment loop ──
-    exp_num = 0
-    while True:
-        exp_num += 1
-        elapsed = (time.time() - session_start) / 3600
-        print(f"\n{'#' * 60}")
-        print(f"# Experiment #{exp_num} | Best CDS: {best_cds:.4f} | Session: {elapsed:.1f}h")
-        print(f"{'#' * 60}")
-
-        # Ask LLM
-        config = read_train_config()
-        history = read_file(RESULTS_TSV)
-        desc, changes = generate_experiment(exp_num, config, history, suggestions)
-
-        if not changes:
-            print("[WARN] LLM returned no changes, retrying...")
-            desc, changes = generate_experiment(exp_num, config, history, suggestions)
             if not changes:
-                print("[SKIP] No valid changes after retry.")
+                print("⚠️ 未生成参数，跳过")
                 continue
 
-        print(f"  Hypothesis: {desc}")
-        for line in changes.split("\n"):
-            if line.strip():
-                print(f"    {line.strip()}")
+            params = apply_changes(changes)
+            print(f"策略：{desc}")
+            print(f"参数：{params}")
 
-        # Save backup, apply changes
-        backup = read_file(TRAIN_SCRIPT)
-        apply_changes(changes)
+            git_commit(f"exp{exp}: {desc[:50]}")
+            unload_model()
+            ok, duration = run_training(exp)
 
-        # VRAM safety check
-        if not check_vram_safety():
-            print("  [VRAM GUARD] Unsafe config, reverting to safe defaults")
-            force_safe_config()
-            desc += " [VRAM-fixed]"
+            m = parse_metrics() if ok else {"cds":0, "mAP50":0, "Recall":0, "Precision":0}
+            status = "DISCARD"
 
-        # Commit → train → evaluate
-        git_commit(f"exp{exp_num}: {desc}")
-        unload_model()
-        success, dur = run_training()
-        commit = git_short_hash()
+            current_score = m["cds"] + m["Recall"] + m["Precision"]
+            best_score = best["cds"] + best["Recall"] + best["Precision"]
 
-        if success:
-            metrics = parse_metrics()
-            cds = float(metrics.get("cds", 0))
-            improvement = cds - best_cds
-
-            if improvement > 0.001:
-                # KEEP — branch advances
-                status = "keep"
-                best_cds, best_commit, best_desc = cds, commit, desc
-                log_result(commit, metrics, status, desc)
-                git("add", RESULTS_TSV, STATUS_MD)
-                git("commit", "--amend", "--no-edit")
-                git_push()
-                print(f"  >>> KEEP — CDS {cds:.4f} (+{improvement:.4f})")
+            if current_score > best_score + 0.001:
+                best = m.copy()
+                no_improve = 0
+                status = "BEST"
+                save_best_weights()
+                print("✅ 刷新最优！")
             else:
-                # DISCARD — revert
-                status = "discard"
-                log_result(commit, metrics, status, desc)
+                no_improve += 1
                 git("reset", "--hard", "HEAD~1")
-                # Commit just the results log
-                git("add", RESULTS_TSV)
-                git("commit", "-m", f"log: discard — {desc[:60]}")
-                git_push()
-                print(f"  >>> DISCARD — CDS {cds:.4f} ({improvement:+.4f})")
-        else:
-            # CRASH — revert
-            status = "crash"
-            cds = 0.0
-            log_result("CRASH", {}, status, desc)
-            git("reset", "--hard", "HEAD~1")
-            with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
-                f.write(backup)
-            git("add", RESULTS_TSV)
-            git("commit", "-m", f"log: crash — {desc[:60]}")
-            print(f"  >>> CRASH — reverted")
+                print(f"❌ 无提升，连续{no_improve}轮")
 
-        last_exps.append({"num": exp_num, "cds": f"{cds:.4f}" if cds else "CRASH", "status": status, "desc": desc})
-        update_status(exp_num, best_cds, best_commit, best_desc, last_exps)
+            log_experiment_result(exp, m, status, params)
 
-        print(f"  Duration: {dur:.0f}s | Cooling {COOLDOWN_SECONDS}s...")
-        time.sleep(COOLDOWN_SECONDS)
+            if no_improve >= MAX_NO_IMPROVE:
+                print("\n🛑 连续无提升，停止训练")
+                break
+            if best["cds"] >= STOP_CDS or best["mAP50"] >= STOP_MAP50:
+                print("\n🛑 达到目标精度，停止训练")
+                break
 
+    except KeyboardInterrupt:
+        print("\n⏹️ 手动停止")
+
+    # ✅ 最后保存全局最优模型
+    save_final_best_model()
+
+    print("\n" + "="*50)
+    print("🎉 训练全部完成！")
+    print("最终最优指标：")
+    print(f"CDS: {best['cds']:.4f}")
+    print(f"mAP50: {best['mAP50']:.4f}")
+    print(f"Recall: {best['Recall']:.4f}")
+    print(f"Precision: {best['Precision']:.4f}")
+    print(f"最优模型：best_final_model/best.pt")
+    print("="*50)
 
 if __name__ == "__main__":
-    if "--preflight" in sys.argv:
-        print("=" * 60)
-        print(" PREFLIGHT CHECK")
-        print("=" * 60)
-        resolve_model()
-        test = query_ollama("Reply: OK", max_tokens=10)
-        print(f"  Ollama: {'OK' if test else 'FAIL'} ({OLLAMA_MODEL})")
-
-        r = subprocess.run([PYTHON, "-c",
-            "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"],
-            capture_output=True, text=True, timeout=30)
-        print(f"  CUDA: {r.stdout.strip()}")
-
-        content = read_file(TRAIN_SCRIPT)
-        print(f"  VRAM safe: {check_vram_safety()}")
-
-        model = re.search(r'^MODEL\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
-        if model:
-            p = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(TRAIN_SCRIPT)), model.group(1)))
-            print(f"  Model file: {p} ({'EXISTS' if os.path.isfile(p) else 'MISSING'})")
-        print("=" * 60)
-    else:
-        try:
-            main()
-        except KeyboardInterrupt:
-            print("\n[Ctrl+C] Stopped. Results saved in results.tsv and status.md.")
+    main()
