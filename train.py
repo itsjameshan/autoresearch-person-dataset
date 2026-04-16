@@ -35,7 +35,7 @@ from evaluate import evaluate_model, print_metrics
 MODEL = "person_dataset/yolo12l.pt"
 
 # Dataset
-DATA_YAML = "person_dataset/person.yaml"
+DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
 IMGSZ = 1280
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
@@ -68,9 +68,9 @@ BOX=8.0
 CLS=0.4
 
 # Other
-AMP = True
-CACHE = "disk"      # Prefer deterministic and lower RAM pressure on Windows
-WORKERS = 2
+AMP = False
+CACHE = None
+WORKERS = 0
 SINGLE_CLS = True
 
 # ══════════════════════════════════════════════════════════════
@@ -104,12 +104,12 @@ def train():
 
     results = model.train(
         data=data_yaml,
-        epochs=300,             # high ceiling — time= will stop training
-        time=TIME_MINUTES / 60, # convert minutes to hours for Ultralytics
+        epochs=300,
+        time=TIME_MINUTES / 60,
         imgsz=IMGSZ,
         batch=BATCH,
         device=DEVICE,
-        patience=300,           # disable early stopping — let time budget decide
+        patience=0,
         project=PROJECT,
         name=NAME,
         exist_ok=True,
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     print(f"=== Autoresearch Experiment ===")
     print(f"Model: {MODEL}")
     print(f"Time budget: {TIME_MINUTES} min, Batch: {BATCH}, ImgSz: {IMGSZ}")
-    print(f"LR: {LR0} → {LRF}, CosLR: {COS_LR}")
+    print(f"LR: {LR0} -> {LRF}, CosLR: {COS_LR}")
     print(f"Augmentation: mosaic={MOSAIC} mixup={MIXUP} copy_paste={COPY_PASTE}")
     print(f"Loss: box={BOX} cls={CLS}")
     print()
