@@ -14,6 +14,10 @@ DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
 import os
 import sys
 import torch
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"    # 只识别GPU，禁用CPU
+os.environ["ULTRALYTICS_CPU_ONLY"] = "0"    # 禁止Ultralytics用CPU
+torch.cuda.set_device(0)                   # 强制绑定GPU0
+assert torch.cuda.is_available(), "GPU不可用，直接退出"
 
 # ── Fix torch.load for newer PyTorch ──
 _original_load = torch.load
