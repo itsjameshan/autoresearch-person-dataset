@@ -45,8 +45,8 @@ BATCH = 2
 DEVICE = 0
 
 # Learning rate
-LR0=0.01
-LRF=0.1
+LR0=0.003
+LRF=0.05
 COS_LR = True
 
 # Data augmentation
@@ -58,7 +58,7 @@ TRANSLATE=0.35
 SCALE=0.75
 FLIPUD = 0.5
 FLIPLR = 0.5
-MOSAIC=0.9
+MOSAIC=0.98
 MIXUP=0.3
 COPY_PASTE=0.3
 ERASING = 0.4
