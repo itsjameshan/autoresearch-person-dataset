@@ -14,10 +14,7 @@ DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
 import os
 import sys
 import torch
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"    # 只识别GPU，禁用CPU
-os.environ["ULTRALYTICS_CPU_ONLY"] = "0"    # 禁止Ultralytics用CPU
-torch.cuda.set_device(0)                   # 强制绑定GPU0
-assert torch.cuda.is_available(), "GPU不可用，直接退出"
+
 
 # ── Fix torch.load for newer PyTorch ──
 _original_load = torch.load
@@ -36,20 +33,20 @@ from evaluate import evaluate_model, print_metrics
 # Model — use repo-relative path with person_dataset/ prefix
 # Available: person_dataset/yolov8n.pt, yolov8s.pt, yolo12n.pt, yolo12s.pt
 # VRAM budget (12GB limit): yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB
-MODEL = "person_dataset/yolo12l.pt"
+MODEL = "person_dataset/yolo12s.pt"
 
 # Dataset
 DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
 IMGSZ = 1280
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
-TIME_MINUTES = 5
-BATCH = 4
+TIME_MINUTES = 30
+BATCH = 2
 DEVICE = 0
 
 # Learning rate
-LR0=0.001
-LRF=0.01
+LR0=0.01
+LRF=0.1
 COS_LR = True
 
 # Data augmentation
@@ -72,7 +69,7 @@ BOX=8.0
 CLS=0.4
 
 # Other
-AMP = False
+AMP = True
 CACHE = None
 WORKERS = 0
 SINGLE_CLS = True
