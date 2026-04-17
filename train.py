@@ -40,36 +40,36 @@ DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
 IMGSZ = 1280
 
 # Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
-TIME_MINUTES = 30
+TIME_MINUTES = 0
 BATCH = 2
 DEVICE = 0
 
 # Learning rate
-LR0=0.003
-LRF=0.05
+LR0=0.001
+LRF=0.0001
 COS_LR = True
 
 # Data augmentation
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
-DEGREES=25.0
-TRANSLATE=0.35
-SCALE=0.75
+DEGREES=45.0
+TRANSLATE=0.5
+SCALE=0.9
 FLIPUD = 0.5
 FLIPLR = 0.5
-MOSAIC=0.98
-MIXUP=0.3
-COPY_PASTE=0.3
+MOSAIC=0.95
+MIXUP=0.45
+COPY_PASTE=0.35
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
 # Loss weights
-BOX=8.0
-CLS=0.4
+BOX=25.0
+CLS=0.85
 
 # Other
-AMP = True
+AMP = False
 CACHE = None
 WORKERS = 0
 SINGLE_CLS = True
