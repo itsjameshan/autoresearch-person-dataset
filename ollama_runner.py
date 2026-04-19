@@ -1,6 +1,6 @@
 """
 ollama_runner.py - YOLO12s 专用自动优化
-固定：YOLO12s + 1280尺寸 + batch=4 + qwen2.5-coder:7b
+固定：YOLO12s + 1280尺寸 + batch=2 + qwen2.5-coder:7b
 自动停止：达到指标阈值 / 30轮 / 5轮不提升
 自动保存最优模型权重
 最终保存效果最好的一轮权重到 best_final_model
@@ -12,7 +12,6 @@ import sys
 import json
 import time
 import subprocess
-import datetime
 import urllib.request
 import urllib.error
 import threading
@@ -66,7 +65,6 @@ def unload_model():
         urllib.request.urlopen(urllib.request.Request(OLLAMA_URL, data=payload), timeout=10).read()
     except:
         pass
-
 
 
 def git(*args):
@@ -168,22 +166,28 @@ def run_training(exp_num):
 
 def parse_metrics():
     log = read_file(RUN_LOG)
-    metrics = {"cds":0.0, "mAP50":0.0, "Recall":0.0, "Precision":0.0}
-    valid = False
-
-    # 精准匹配你的 YOLO 验证结果行
+    metrics = {"cds": 0.0, "mAP50": 0.0, "Recall": 0.0, "Precision": 0.0}
     pattern = re.compile(r"all\s+\d+\s+\d+\s+([0-9\.]+)\s+([0-9\.]+)\s+([0-9\.]+)\s+([0-9\.]+)")
-    match = pattern.search(log)
+    matches = pattern.findall(log)
 
+    if matches:
+        p, r, m50, m = matches[-1]
+        metrics["Precision"] = float(p)
+        metrics["Recall"] = float(r)
+        metrics["mAP50"] = float(m50)
+        metrics["cds"] = float(m50)  # CDS 复用 mAP50
+
+    return metrics
     if match:
         metrics["Precision"] = float(match.group(1))
         metrics["Recall"]    = float(match.group(2))
         metrics["mAP50"]     = float(match.group(3))
         metrics["cds"]       = float(match.group(3))
-        valid = True
-        print(f"✅ 成功解析指标：Precision={metrics['Precision']:.4f}, Recall={metrics['Recall']:.4f}, mAP50={metrics['mAP50']:.4f}")
-
-    return metrics if valid else None
+        print(f"成功解析指标：Precision={metrics['Precision']:.4f}, Recall={metrics['Recall']:.4f}, mAP50={metrics['mAP50']:.4f}")
+        return metrics
+    else:
+        print("未找到指标，使用默认值")
+        return metrics
 
 # ======================================================================
 # 保存最优模型
@@ -255,7 +259,7 @@ DESCRIPTION: ...
     desc = ""
     lines = []
     for line in res.split("\n"):
-        line = strip()
+        line = line.strip()
         if line.startswith("DESCRIPTION:"):
             desc = line.replace("DESCRIPTION:", "").strip()
         elif "=" in line and not line.startswith("#"):
@@ -301,15 +305,9 @@ def main():
             unload_model()
             ok, duration = run_training(exp)
 
-            m = parse_metrics() if ok else None
+            m = parse_metrics()
             status = "DISCARD"
 
-            if m is None:
-                print("训练未完成，无有效指标，本轮不计入判断")
-                log_experiment_result(exp, {"cds": 0, "mAP50": 0, "Recall": 0, "Precision": 0}, status, params)
-                continue
-
-            # ===================== 【在这里加打印】 =====================
             current_score = m["cds"] + m["Recall"] + m["Precision"]
             best_score = best["cds"] + best["Recall"] + best["Precision"]
 
@@ -322,7 +320,6 @@ def main():
                 print("判断：本轮有提升，刷新最优！")
             else:
                 print("判断：本轮无提升，继续优化！")
-            # ===========================================================
 
             if current_score > best_score + 0.001:
                 best = m.copy()

@@ -45,28 +45,28 @@ BATCH = 2
 DEVICE = 0
 
 # Learning rate
-LR0=0.001
-LRF=0.0001
+LR0=0.001 | LRF=0.0001 | MOSAIC=0.95 | MIXUP=0.4 | COPY_PASTE=0.3 | BOX=60.0 | CLS=0.9 | CONF=0.25 | IOU=0.7
+LRF=0.001
 COS_LR = True
 
 # Data augmentation
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
-DEGREES=45.0
-TRANSLATE=0.5
-SCALE=0.9
+DEGREES=60.0
+TRANSLATE=0.4
+SCALE=0.8
 FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC=0.95
-MIXUP=0.45
-COPY_PASTE=0.35
+MIXUP=0.4
+COPY_PASTE=0.3
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
 # Loss weights
-BOX=25.0
-CLS=0.85
+BOX=50.0
+CLS=0.8
 
 # Other
 AMP = False
@@ -182,3 +182,10 @@ if __name__ == "__main__":
     data_yaml_path = _abs(DATA_YAML)
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
+
+    try:
+        import torch
+        torch.cuda.empty_cache()
+        print("\n✅ CUDA 显存已自动清理")
+    except:
+        pass
