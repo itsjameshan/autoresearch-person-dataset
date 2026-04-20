@@ -1,7 +1,7 @@
 """
 ollama_runner.py - YOLO12s 专用自动优化
 固定：YOLO12s + 1280尺寸 + batch=2 + qwen2.5-coder:7b
-自动停止：达到指标阈值 / 30轮 / 5轮不提升
+自动停止：达到指标阈值 / 300轮 / 20轮不提升
 自动保存最优模型权重
 最终保存效果最好的一轮权重到 best_final_model
 """
@@ -16,6 +16,7 @@ import urllib.request
 import urllib.error
 import threading
 import shutil
+import torch
 
 # ======================================================================
 # 固定配置
@@ -25,7 +26,7 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
 BRANCH = "autoresearch/crowd-win"
 
-TRAIN_TIMEOUT = 3600
+TRAIN_TIMEOUT = 7200
 PYTHON = sys.executable
 TRAIN_SCRIPT = "train.py"
 RUN_LOG = "run.log"
@@ -36,7 +37,7 @@ BEST_PT_DIR = "best_model"
 FINAL_BEST_DIR = "best_final_model"
 
 MAX_EXPERIMENTS = 300
-MAX_NO_IMPROVE = 10
+MAX_NO_IMPROVE = 20
 STOP_CDS = 0.95
 STOP_MAP50 = 0.92
 
@@ -65,7 +66,6 @@ def unload_model():
         urllib.request.urlopen(urllib.request.Request(OLLAMA_URL, data=payload), timeout=10).read()
     except:
         pass
-
 
 def git(*args):
     try:
@@ -99,7 +99,11 @@ def apply_changes(config_block):
     ]
     changes_made = []
     for line in config_block.split("\n"):
-        line = line.strip().replace("`", "")
+        line = line.strip().replace("`", "").strip()
+        if not line or "=" not in line:
+            continue
+        # 强制过滤错误符号 |
+        line = line.replace("|", "").split()[0].strip()
         for param in valid_params:
             if re.match(rf"^{param}\s*=.*", line):
                 content = re.sub(rf"^{param}\s*=.*", line, content, flags=re.MULTILINE)
@@ -109,7 +113,7 @@ def apply_changes(config_block):
     return changes_made
 
 # ======================================================================
-# 强制固定配置：YOLO12s
+# 强制固定配置：观众计数黄金参数
 # ======================================================================
 
 def force_yolo12l_config():
@@ -120,7 +124,17 @@ def force_yolo12l_config():
         "BATCH": "2",
         "TIME_MINUTES": "0",
         "DEVICE": "0",
-        "SINGLE_CLS": "True"
+        "SINGLE_CLS": "True",
+        "CONF": "0.001",
+        "IOU": "0.5",
+        "BOX": "15.0",
+        "CLS": "1.0",
+        "MOSAIC": "0.5",
+        "MIXUP": "0.1",
+        "COPY_PASTE": "0.1",
+        "DEGREES": "10.0",
+        "LR0": "0.002",
+        "LRF": "0.0002"
     }
     for key, value in fixed_config.items():
         content = re.sub(rf"^{key}\s*=.*", f"{key} = {value}", content, flags=re.MULTILINE)
@@ -128,13 +142,16 @@ def force_yolo12l_config():
         f.write(content)
 
 # ======================================================================
-# 训练执行
+# 训练执行 + 显存清理
 # ======================================================================
 
 def run_training(exp_num):
     t0 = time.time()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     proc = subprocess.Popen(
         [PYTHON, "-u", TRAIN_SCRIPT],
@@ -148,6 +165,7 @@ def run_training(exp_num):
             proc.kill()
     threading.Thread(target=watchdog, daemon=True).start()
 
+    log_buffer = []
     with open(RUN_LOG, "a", encoding="utf-8") as log_file:
         log_file.write("\n" + "="*80 + "\n")
         log_file.write("EXPERIMENT {} START | {}\n".format(exp_num, time.ctime()))
@@ -155,13 +173,19 @@ def run_training(exp_num):
         log_file.flush()
         for line in proc.stdout:
             log_file.write(line)
+            log_buffer.append(line)
             log_file.flush()
             print("  | {}".format(line.rstrip()))
     proc.wait()
-    return proc.returncode == 0, time.time() - t0
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    current_log = "".join(log_buffer)
+    return proc.returncode == 0, time.time() - t0, current_log
 
 # ======================================================================
-# 解析指标（已修复 100% 适配你的日志格式）
+# 解析指标
 # ======================================================================
 
 def parse_metrics():
@@ -175,19 +199,9 @@ def parse_metrics():
         metrics["Precision"] = float(p)
         metrics["Recall"] = float(r)
         metrics["mAP50"] = float(m50)
-        metrics["cds"] = float(m50)  # CDS 复用 mAP50
+        metrics["cds"] = float(m50)
 
     return metrics
-    if match:
-        metrics["Precision"] = float(match.group(1))
-        metrics["Recall"]    = float(match.group(2))
-        metrics["mAP50"]     = float(match.group(3))
-        metrics["cds"]       = float(match.group(3))
-        print(f"成功解析指标：Precision={metrics['Precision']:.4f}, Recall={metrics['Recall']:.4f}, mAP50={metrics['mAP50']:.4f}")
-        return metrics
-    else:
-        print("未找到指标，使用默认值")
-        return metrics
 
 # ======================================================================
 # 保存最优模型
@@ -229,17 +243,24 @@ def log_experiment_result(exp_num, m, status, params):
         f.write(f"{exp_num}\t{m['cds']:.4f}\t{m['mAP50']:.4f}\t{m['Recall']:.4f}\t{m['Precision']:.4f}\t{status}\t{p}\n")
 
 # ======================================================================
-# 生成优化参数
+# 优化 prompt：严格禁止输出 | 符号
 # ======================================================================
 
 def generate_optimization(exp_num, current_config, history):
-    prompt = f"""你是专业YOLO12s调参专家，专注体育场观众计数。
-优化目标：
-1. 高mAP50
-2. 高Recall（不漏检）
-3. 高Precision（不误检）
-4. 最优置信度CONF & 最优NMS_IOU
-只输出参数，不要多余内容。
+    prompt = f"""你是专业YOLO12s调参专家，专注体育场高密度观众计数任务。
+优化目标严格按优先级：
+1. 提高Recall，减少人头漏检
+2. 提高mAP50
+3. 提高Precision，减少误检
+4. 搜索最优CONF和IOU
+
+适合小目标、密集人群，不要使用过强数据增强破坏人头特征。
+
+【重要规则】
+每行只输出一个参数，格式：
+LR0=0.002
+不要输出任何 | , # 符号，不要多余文字。
+
 允许优化：LR0,LRF,MOSAIC,MIXUP,COPY_PASTE,DEGREES,TRANSLATE,SCALE,BOX,CLS,CONF,IOU
 严禁修改：MODEL,IMGSZ,BATCH,DEVICE,TIME_MINUTES
 
@@ -267,7 +288,7 @@ DESCRIPTION: ...
     return desc or "Exp {}".format(exp_num), "\n".join(lines)
 
 # ======================================================================
-# 主循环
+# 主循环 + 预热轮（完整满足你所有要求）
 # ======================================================================
 
 def main():
@@ -284,6 +305,17 @@ def main():
     exp = 0
 
     try:
+        # ===================== 预热轮：使用基础参数训练，建立初始基准 =====================
+        print("\n【预热轮：使用基础参数训练，建立初始基准】")
+        ok, duration, current_log = run_training(0)
+        m = parse_metrics()
+        best = m.copy()
+        status = "BEST"
+        save_best_weights()
+        log_experiment_result(0, m, status, ["warmup_baseline"])
+        print("预热轮完成，当前最优 mAP50 = {:.4f}".format(best['mAP50']))
+
+        # ===================== 正式自动调参循环 =====================
         while exp < MAX_EXPERIMENTS:
             exp += 1
             print("\n【第 {}/{} 轮】".format(exp, MAX_EXPERIMENTS))
@@ -303,7 +335,7 @@ def main():
             print("参数：{}".format(params))
 
             unload_model()
-            ok, duration = run_training(exp)
+            ok, duration, current_log = run_training(exp)
 
             m = parse_metrics()
             status = "DISCARD"
@@ -312,24 +344,18 @@ def main():
             best_score = best["cds"] + best["Recall"] + best["Precision"]
 
             print(f"\n====== 本轮训练结果 ======")
-            print(
-                f"本轮指标：CDS={m['cds']:.4f} | mAP50={m['mAP50']:.4f} | Recall={m['Recall']:.4f} | Precision={m['Precision']:.4f}")
+            print(f"本轮指标：CDS={m['cds']:.4f} | mAP50={m['mAP50']:.4f} | Recall={m['Recall']:.4f} | Precision={m['Precision']:.4f}")
             print(f"当前总分：{current_score:.4f} | 历史最佳：{best_score:.4f}")
 
-            if current_score > best_score + 0.001:
-                print("判断：本轮有提升，刷新最优！")
-            else:
-                print("判断：本轮无提升，继续优化！")
-
-            if current_score > best_score + 0.001:
+            if current_score > best_score + 0.0005:
                 best = m.copy()
                 no_improve = 0
                 status = "BEST"
                 save_best_weights()
-                print("刷新最优！")
+                print("判断：本轮有提升，刷新最优！")
             else:
                 no_improve += 1
-                print("无提升，连续{}轮".format(no_improve))
+                print("判断：本轮无提升，继续优化！无提升连续次数：{}".format(no_improve))
 
             log_experiment_result(exp, m, status, params)
 

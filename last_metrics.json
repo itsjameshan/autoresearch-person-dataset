@@ -1,0 +1,22 @@
+{
+  "cds": 0.1151,
+  "mAP50": 0.0166,
+  "mAP50_95": 0.0048,
+  "precision": 0.0246,
+  "recall": 0.3019,
+  "f1_optimal": 0.0454,
+  "small_obj_recall": 0.0,
+  "counting_acc": 0.2186,
+  "counting_mae": 20.4831,
+  "mean_confidence": 0.3398,
+  "inference_ms": 78.8,
+  "latency_score": 0.7243,
+  "peak_memory_mb": 39143.4,
+  "deploy_conf": 0.2,
+  "deploy_iou_nms": 0.3,
+  "precision_gate": "FAIL(0.02<0.9)",
+  "recall_gate": "FAIL(0.30<0.85)",
+  "latency_gate": "PASS",
+  "latency_gate_ms": 115.0,
+  "target_met": false
+}
