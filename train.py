@@ -1,20 +1,12 @@
 """
 train.py — THE ONE FILE the agent modifies.
-
 Each experiment: change hyperparams/model/augmentation here, then run:
   python train.py > run.log 2>&1
-
-Training runs for a FIXED TIME BUDGET of 5 minutes (wall clock).
-After training, this script calls evaluate_model() and prints structured
-metrics for the autoresearch loop to parse via grep.
-
-DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
 """
 
 import os
 import sys
 import torch
-
 
 # ── Fix torch.load for newer PyTorch ──
 _original_load = torch.load
@@ -30,49 +22,46 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG — Agent modifies this section
 # ══════════════════════════════════════════════════════════════
 
-# Model — use repo-relative path with person_dataset/ prefix
-# Available: person_dataset/yolov8n.pt, yolov8s.pt, yolo12n.pt, yolo12s.pt
-# VRAM budget (12GB limit): yolov8s+640→~3GB | yolov8s+1280→~8GB | yolo12s+640→~5GB
-MODEL = "person_dataset/yolo12s.pt"
-
-# Dataset
+MODEL = "yolo12s.pt"
 DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
 IMGSZ = 1280
 
-# Training — FIXED 5-MINUTE TIME BUDGET (do not increase beyond 10)
+# ===================== 【关键】贝叶斯控制的参数 =====================
 TIME_MINUTES = 0
 BATCH = 2
 DEVICE = 0
-
-# Learning rate
-LR0=0.0015
-LRF=0.001
-COS_LR = True
-
-# Data augmentation
-HSV_H = 0.015
-HSV_S = 0.7
-HSV_V = 0.4
-DEGREES=5.0
-TRANSLATE=0.3
-SCALE=0.7
-FLIPUD = 0.5
-FLIPLR = 0.5
-MOSAIC=0.4
-MIXUP=0.2
-COPY_PASTE=0.05
-ERASING = 0.4
-CLOSE_MOSAIC = 10
-
-# Loss weights
-BOX=8.0
-CLS=0.7
-
-# Other
 AMP = False
 CACHE = None
 WORKERS = 0
 SINGLE_CLS = True
+COS_LR = True
+
+# 学习率
+LR0 = 0.0035
+LRF = 0.0004969409379021998
+
+# 增强
+HSV_H = 0.015
+HSV_S = 0.7
+HSV_V = 0.4
+DEGREES = 5.0
+TRANSLATE = 0.3
+SCALE = 0.7
+FLIPUD = 0.5
+FLIPLR = 0.5
+MOSAIC = 0.40342537519900845
+MIXUP = 0.0
+COPY_PASTE = 0.2
+ERASING = 0.4
+CLOSE_MOSAIC = 10
+
+# 损失
+BOX = 19.445283794975794
+CLS = 0.7085783830096928
+
+# 【贝叶斯可调】置信度与NMS阈值
+CONF = 0.002439817175999175
+IOU = 0.4836474394931204
 
 # ══════════════════════════════════════════════════════════════
 # TRAINING — do not modify below this line
@@ -80,32 +69,24 @@ SINGLE_CLS = True
 
 PROJECT = "autoresearch_runs"
 NAME = "current"
-
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
-
 
 def _abs(rel_or_abs: str) -> str:
     if os.path.isabs(rel_or_abs):
         return os.path.normpath(rel_or_abs)
     return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
 
-
 def train():
     model_path = _abs(MODEL)
-    if not os.path.isfile(model_path):
-        print(f"[FATAL] model not found: {model_path}")
-        sys.exit(1)
-
     data_yaml = _abs(DATA_YAML)
-    if not os.path.isfile(data_yaml):
-        print(f"[FATAL] data yaml not found: {data_yaml}")
-        sys.exit(1)
-
     model = YOLO(model_path)
+
+    # 接收从命令行传入的 epoch 数量（贝叶斯runner控制）
+    epochs_to_run = int(sys.argv[1]) if len(sys.argv) > 1 else 2
 
     results = model.train(
         data=data_yaml,
-        epochs=300,
+        epochs=epochs_to_run,  # 【关键】由runner控制，固定2轮
         time=TIME_MINUTES / 60,
         imgsz=IMGSZ,
         batch=BATCH,
@@ -116,8 +97,8 @@ def train():
         exist_ok=True,
 
         single_cls=SINGLE_CLS,
-        conf=0.001,
-        iou=0.6,
+        conf=CONF,       # 现在贝叶斯可以调了
+        iou=IOU,         # 现在贝叶斯可以调了
 
         lr0=LR0,
         lrf=LRF,
@@ -149,7 +130,6 @@ def train():
         verbose=True,
     )
 
-    # Find best model
     try:
         save_dir = str(results.save_dir)
     except Exception:
@@ -165,27 +145,13 @@ def train():
 
     return best_pt, epochs_completed
 
-
 if __name__ == "__main__":
-    print(f"=== Autoresearch Experiment ===")
-    print(f"Model: {MODEL}")
-    print(f"Time budget: {TIME_MINUTES} min, Batch: {BATCH}, ImgSz: {IMGSZ}")
-    print(f"LR: {LR0} -> {LRF}, CosLR: {COS_LR}")
-    print(f"Augmentation: mosaic={MOSAIC} mixup={MIXUP} copy_paste={COPY_PASTE}")
-    print(f"Loss: box={BOX} cls={CLS}")
-    print()
-
     best_pt, epochs_completed = train()
-
-    print()
-    print(f"=== Evaluation (model: {best_pt}) ===")
     data_yaml_path = _abs(DATA_YAML)
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
 
     try:
-        import torch
         torch.cuda.empty_cache()
-        print("\n✅ CUDA 显存已自动清理")
     except:
         pass

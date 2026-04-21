@@ -1,385 +1,241 @@
-"""
-ollama_runner.py - YOLO12s 专用自动优化
-固定：YOLO12s + 1280尺寸 + batch=2 + qwen2.5-coder:7b
-自动停止：达到指标阈值 / 300轮 / 20轮不提升
-自动保存最优模型权重
-最终保存效果最好的一轮权重到 best_final_model
-"""
-
 import os
 import re
 import sys
 import json
 import time
-import subprocess
-import urllib.request
-import urllib.error
-import threading
 import shutil
+import subprocess
+import threading
 import torch
+from skopt import Optimizer
+from skopt.space import Real
 
-# ======================================================================
-# 固定配置
-# ======================================================================
+# ==============================================
+# 【你必须看懂的配置】
+# ==============================================
+TRAIN_TIMEOUT       = 7200        # 安全超时：2小时（绝对够用）
+PYTHON              = sys.executable
+TRAIN_SCRIPT        = "train.py"
+LOG_FILE            = "run.log"   # 训练日志文件
+RESULTS_FILE        = "results.tsv" # 结果表格文件
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5-coder:7b-instruct-q4_K_M"
-BRANCH = "autoresearch/crowd-win"
+MAX_EXPERIMENTS     = 25          # 贝叶斯最多搜索25组参数（1天多跑完）
+MAX_NO_IMPROVE      = 8           # 连续8组不涨分就停止
+TARGET_MAP50        = 0.92        # 达到这个分数直接停止
+TRAIN_EPOCHS        = 2           # 【核心修改】每组参数跑2个epoch
 
-TRAIN_TIMEOUT = 7200
-PYTHON = sys.executable
-TRAIN_SCRIPT = "train.py"
-RUN_LOG = "run.log"
-RESULTS_TSV = "results.tsv"
-STATUS_MD = "status.md"
+# 贝叶斯优化的10个参数（搜索范围）
+search_space = [
+    Real(0.0005, 0.0035,  name="LR0"),
+    Real(0.00005, 0.0005, name="LRF"),
+    Real(0.0005, 0.003,   name="CONF"),
+    Real(0.4, 0.65,       name="IOU"),
+    Real(10.0, 30.0,      name="BOX"),
+    Real(0.5, 1.5,        name="CLS"),
+    Real(0.3, 0.7,        name="MOSAIC"),
+    Real(0.0, 0.2,        name="MIXUP"),
+    Real(0.0, 0.2,        name="COPY_PASTE"),
+    Real(5.0, 20.0,       name="DEGREES"),
+]
 
-BEST_PT_DIR = "best_model"
-FINAL_BEST_DIR = "best_final_model"
+optimizer = Optimizer(dimensions=search_space, base_estimator="GP", acq_func="gp_hedge", random_state=42)
 
-MAX_EXPERIMENTS = 300
-MAX_NO_IMPROVE = 20
-STOP_CDS = 0.95
-STOP_MAP50 = 0.92
+# ==============================================
+# 初始化结果文件（只写一次表头）
+# ==============================================
+def init_results_file():
+    if not os.path.exists(RESULTS_FILE):
+        with open(RESULTS_FILE, "w", encoding="utf-8") as f:
+            f.write("exp\tmAP50\tRecall\tPrecision\tscore\tstatus\n")
 
-# ======================================================================
-# OLLAMA 交互
-# ======================================================================
+# ==============================================
+# 写入单轮结果（追加模式，不会覆盖）
+# ==============================================
+def append_result(exp_num, m50, r, p, score, status):
+    with open(RESULTS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{exp_num}\t{m50:.4f}\t{r:.4f}\t{p:.4f}\t{score:.4f}\t{status}\n")
 
-def query_ollama(prompt, temperature=0.7, max_tokens=4096):
-    payload = json.dumps({
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-    }).encode()
-    req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return json.loads(resp.read().decode()).get("response", "")
-    except Exception as e:
-        print("[ERROR] Ollama: {}".format(e))
-        return None
-
-def unload_model():
-    try:
-        payload = json.dumps({"model": OLLAMA_MODEL, "keep_alive": 0}).encode()
-        urllib.request.urlopen(urllib.request.Request(OLLAMA_URL, data=payload), timeout=10).read()
-    except:
-        pass
-
-def git(*args):
-    try:
-        r = subprocess.run(["git"] + list(args), capture_output=True, text=True, timeout=20, encoding="utf-8", errors="replace")
-        return r.returncode, r.stdout.strip(), r.stderr.strip()
-    except:
-        return -1, "", ""
-
-def git_commit(msg):
-    return
-
-def git_short_hash():
-    return ""
-
-# ======================================================================
-# 文件操作
-# ======================================================================
-
-def read_file(path):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
-
-def apply_changes(config_block):
-    content = read_file(TRAIN_SCRIPT)
-    valid_params = [
-        "LR0", "LRF", "MOSAIC", "MIXUP", "COPY_PASTE",
-        "DEGREES", "TRANSLATE", "SCALE", "BOX", "CLS",
-        "CONF", "IOU"
-    ]
-    changes_made = []
-    for line in config_block.split("\n"):
-        line = line.strip().replace("`", "").strip()
-        if not line or "=" not in line:
-            continue
-        # 强制过滤错误符号 |
-        line = line.replace("|", "").split()[0].strip()
-        for param in valid_params:
-            if re.match(rf"^{param}\s*=.*", line):
-                content = re.sub(rf"^{param}\s*=.*", line, content, flags=re.MULTILINE)
-                changes_made.append(line)
-    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
-        f.write(content)
-    return changes_made
-
-# ======================================================================
-# 强制固定配置：观众计数黄金参数
-# ======================================================================
-
-def force_yolo12l_config():
-    content = read_file(TRAIN_SCRIPT)
-    fixed_config = {
-        "MODEL": '"person_dataset/yolo12s.pt"',
-        "IMGSZ": "1280",
-        "BATCH": "2",
-        "TIME_MINUTES": "0",
-        "DEVICE": "0",
-        "SINGLE_CLS": "True",
-        "CONF": "0.001",
-        "IOU": "0.5",
-        "BOX": "15.0",
-        "CLS": "1.0",
-        "MOSAIC": "0.5",
-        "MIXUP": "0.1",
-        "COPY_PASTE": "0.1",
-        "DEGREES": "10.0",
-        "LR0": "0.002",
-        "LRF": "0.0002"
-    }
-    for key, value in fixed_config.items():
-        content = re.sub(rf"^{key}\s*=.*", f"{key} = {value}", content, flags=re.MULTILINE)
-    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
-        f.write(content)
-
-# ======================================================================
-# 训练执行 + 显存清理
-# ======================================================================
-
+# ==============================================
+# 训练函数（固定跑2个epoch）
+# ==============================================
 def run_training(exp_num):
-    t0 = time.time()
-    env = os.environ.copy()
+    env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # 每次训练前清空旧日志，避免解析到上一轮的结果
+    if os.path.exists(LOG_FILE):
+        os.remove(LOG_FILE)
+
+    # 启动训练，固定跑2个epoch
     proc = subprocess.Popen(
-        [PYTHON, "-u", TRAIN_SCRIPT],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env=env, text=True, bufsize=1, encoding="utf-8", errors="replace"
+        [PYTHON, "-u", TRAIN_SCRIPT, str(TRAIN_EPOCHS)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace"
     )
 
     def watchdog():
         time.sleep(TRAIN_TIMEOUT)
-        if proc.poll() is None:
+        try:
             proc.kill()
+        except:
+            pass
     threading.Thread(target=watchdog, daemon=True).start()
 
-    log_buffer = []
-    with open(RUN_LOG, "a", encoding="utf-8") as log_file:
-        log_file.write("\n" + "="*80 + "\n")
-        log_file.write("EXPERIMENT {} START | {}\n".format(exp_num, time.ctime()))
-        log_file.write("="*80 + "\n")
-        log_file.flush()
+    with open(LOG_FILE, "w", encoding="utf-8") as f:
         for line in proc.stdout:
-            log_file.write(line)
-            log_buffer.append(line)
-            log_file.flush()
-            print("  | {}".format(line.rstrip()))
+            f.write(line)
+            print(line.rstrip())
     proc.wait()
+    return proc.returncode == 0
 
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    current_log = "".join(log_buffer)
-    return proc.returncode == 0, time.time() - t0, current_log
-
-# ======================================================================
-# 解析指标
-# ======================================================================
-
-def parse_metrics():
-    log = read_file(RUN_LOG)
-    metrics = {"cds": 0.0, "mAP50": 0.0, "Recall": 0.0, "Precision": 0.0}
-    pattern = re.compile(r"all\s+\d+\s+\d+\s+([0-9\.]+)\s+([0-9\.]+)\s+([0-9\.]+)\s+([0-9\.]+)")
-    matches = pattern.findall(log)
-
-    if matches:
-        p, r, m50, m = matches[-1]
-        metrics["Precision"] = float(p)
-        metrics["Recall"] = float(r)
-        metrics["mAP50"] = float(m50)
-        metrics["cds"] = float(m50)
-
-    return metrics
-
-# ======================================================================
-# 保存最优模型
-# ======================================================================
-
-def save_best_weights():
-    os.makedirs(BEST_PT_DIR, exist_ok=True)
-    for root, dirs, files in os.walk("autoresearch_runs/current/weights"):
-        if "best.pt" in files:
-            src = os.path.join(root, "best.pt")
-            dst = os.path.join(BEST_PT_DIR, "best.pt")
-            shutil.copy2(src, dst)
-            print("最优权重保存：{}".format(dst))
-            return
-
-def save_final_best_model():
-    os.makedirs(FINAL_BEST_DIR, exist_ok=True)
-    src = os.path.join(BEST_PT_DIR, "best.pt")
-    dst = os.path.join(FINAL_BEST_DIR, "best.pt")
-    if os.path.exists(src):
-        shutil.copy2(src, dst)
-        print("\n最终全局最优模型已保存：{}".format(dst))
-        print("路径：best_final_model/best.pt")
-    else:
-        print("\n未找到最优模型")
-
-# ======================================================================
-# 记录结果
-# ======================================================================
-
-def init_results():
-    if not os.path.exists(RESULTS_TSV):
-        with open(RESULTS_TSV, "w", encoding="utf-8") as f:
-            f.write("exp_num\tcds\tmAP50\tRecall\tPrecision\tstatus\toptimized_params\n")
-
-def log_experiment_result(exp_num, m, status, params):
-    p = " | ".join(params) if params else "none"
-    with open(RESULTS_TSV, "a", encoding="utf-8") as f:
-        f.write(f"{exp_num}\t{m['cds']:.4f}\t{m['mAP50']:.4f}\t{m['Recall']:.4f}\t{m['Precision']:.4f}\t{status}\t{p}\n")
-
-# ======================================================================
-# 优化 prompt：严格禁止输出 | 符号
-# ======================================================================
-
-def generate_optimization(exp_num, current_config, history):
-    prompt = f"""你是专业YOLO12s调参专家，专注体育场高密度观众计数任务。
-优化目标严格按优先级：
-1. 提高Recall，减少人头漏检
-2. 提高mAP50
-3. 提高Precision，减少误检
-4. 搜索最优CONF和IOU
-
-适合小目标、密集人群，不要使用过强数据增强破坏人头特征。
-
-【重要规则】
-每行只输出一个参数，格式：
-LR0=0.002
-不要输出任何 | , # 符号，不要多余文字。
-
-允许优化：LR0,LRF,MOSAIC,MIXUP,COPY_PASTE,DEGREES,TRANSLATE,SCALE,BOX,CLS,CONF,IOU
-严禁修改：MODEL,IMGSZ,BATCH,DEVICE,TIME_MINUTES
-
-当前参数：
-{current_config}
-
-历史结果：
-{history}
-
-输出格式：
-DESCRIPTION: ...
-参数=值
-"""
-    res = query_ollama(prompt, temperature=0.6)
-    if not res:
-        return None, None
-    desc = ""
-    lines = []
-    for line in res.split("\n"):
-        line = line.strip()
-        if line.startswith("DESCRIPTION:"):
-            desc = line.replace("DESCRIPTION:", "").strip()
-        elif "=" in line and not line.startswith("#"):
-            lines.append(line.replace("`", ""))
-    return desc or "Exp {}".format(exp_num), "\n".join(lines)
-
-# ======================================================================
-# 主循环 + 预热轮（完整满足你所有要求）
-# ======================================================================
-
-def main():
-    print("=" * 80)
-    print("YOLO12s 自动调参训练系统 | 最优置信度+NMS | 不漏检不误检")
-    print("最终最优模型将保存到：best_final_model/best.pt")
-    print("=" * 80)
-
-    force_yolo12l_config()
-    init_results()
-
-    best = {"cds": 0.0, "mAP50": 0.0, "Recall": 0.0, "Precision": 0.0}
-    no_improve = 0
-    exp = 0
-
+# ==============================================
+# 从日志读取 mAP / Recall / Precision
+# ==============================================
+def parse_results():
     try:
-        # ===================== 预热轮：使用基础参数训练，建立初始基准 =====================
-        print("\n【预热轮：使用基础参数训练，建立初始基准】")
-        ok, duration, current_log = run_training(0)
-        m = parse_metrics()
-        best = m.copy()
-        status = "BEST"
-        save_best_weights()
-        log_experiment_result(0, m, status, ["warmup_baseline"])
-        print("预热轮完成，当前最优 mAP50 = {:.4f}".format(best['mAP50']))
+        with open(LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            txt = f.read()
+        pattern = re.compile(r"all\s+\d+\s+\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)")
+        matches = pattern.findall(txt)
+        if matches:
+            p, r, m50, m = matches[-1]
+            return float(m50), float(r), float(p)
+    except:
+        pass
+    return 0.0, 0.0, 0.0
 
-        # ===================== 正式自动调参循环 =====================
-        while exp < MAX_EXPERIMENTS:
-            exp += 1
-            print("\n【第 {}/{} 轮】".format(exp, MAX_EXPERIMENTS))
-            print("最佳：CDS={:.4f} | mAP50={:.4f} | Recall={:.4f} | Precision={:.4f}".format(
-                best['cds'], best['mAP50'], best['Recall'], best['Precision']))
+# ==============================================
+# 把参数写入train.py
+# ==============================================
+def apply_params(param_dict):
+    with open(TRAIN_SCRIPT, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-            current = read_file(TRAIN_SCRIPT)
-            history = read_file(RESULTS_TSV)
-            desc, changes = generate_optimization(exp, current, history)
+    for i, line in enumerate(lines):
+        for key, val in param_dict.items():
+            if re.match(rf"^{key}\s*=.*", line.strip()):
+                lines[i] = f"{key} = {val}\n"
 
-            if not changes:
-                print("未生成参数，跳过")
-                continue
+    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+        f.writelines(lines)
 
-            params = apply_changes(changes)
-            print("策略：{}".format(desc))
-            print("参数：{}".format(params))
+# ==============================================
+# 固定基础配置（模型、图片大小、批次等）
+# ==============================================
+def set_base_config():
+    with open(TRAIN_SCRIPT, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    fixed = {
+        "MODEL": '"yolo12s.pt"',
+        "IMGSZ": "1280",
+        "BATCH": "2",
+        "DEVICE": "0",
+        "SINGLE_CLS": "True",
+        "TIME_MINUTES": "0",
+    }
+    for i, line in enumerate(lines):
+        for k, v in fixed.items():
+            if re.match(rf"^{k}\s*=.*", line.strip()):
+                lines[i] = f"{k} = {v}\n"
+    with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+        f.writelines(lines)
 
-            unload_model()
-            ok, duration, current_log = run_training(exp)
+# ==============================================
+# 保存最优模型
+# ==============================================
+def save_best():
+    os.makedirs("best_model", exist_ok=True)
+    src = "autoresearch_runs/current/weights/best.pt"
+    if os.path.exists(src):
+        shutil.copy(src, "best_model/best.pt")
 
-            m = parse_metrics()
-            status = "DISCARD"
+def save_final():
+    os.makedirs("final_best_model", exist_ok=True)
+    src = os.path.join("best_model/best.pt")
+    if os.path.exists(src):
+        shutil.copy(src, "final_best_model/best.pt")
 
-            current_score = m["cds"] + m["Recall"] + m["Precision"]
-            best_score = best["cds"] + best["Recall"] + best["Precision"]
+# ==============================================
+# 主程序
+# ==============================================
+def main():
+    print("=" * 60)
+    print("        贝叶斯超参优化 | 2 epoch/组 | 观众人头检测")
+    print(f"        每组耗时 ≈ {TRAIN_EPOCHS*45} 分钟")
+    print("=" * 60)
 
-            print(f"\n====== 本轮训练结果 ======")
-            print(f"本轮指标：CDS={m['cds']:.4f} | mAP50={m['mAP50']:.4f} | Recall={m['Recall']:.4f} | Precision={m['Precision']:.4f}")
-            print(f"当前总分：{current_score:.4f} | 历史最佳：{best_score:.4f}")
+    set_base_config()
+    init_results_file()  # 初始化结果文件表头
+    best_score = -1
+    best_m50 = best_r = best_p = 0.0
+    no_improve = 0
 
-            if current_score > best_score + 0.0005:
-                best = m.copy()
-                no_improve = 0
-                status = "BEST"
-                save_best_weights()
-                print("判断：本轮有提升，刷新最优！")
-            else:
-                no_improve += 1
-                print("判断：本轮无提升，继续优化！无提升连续次数：{}".format(no_improve))
+    # 预热组（黄金参数）
+    print("\n【预热组】")
+    warm_up = {
+        "LR0": 0.002, "LRF": 0.0002, "CONF": 0.001, "IOU": 0.5,
+        "BOX": 15.0, "CLS": 1.0, "MOSAIC": 0.5, "MIXUP": 0.1,
+        "COPY_PASTE": 0.1, "DEGREES": 10.0
+    }
+    apply_params(warm_up)
+    run_training(0)
+    m50, r, p = parse_results()
+    score = m50 + 0.8*r + 0.4*p
+    best_score = score
+    best_m50, best_r, best_p = m50, r, p
+    save_best()
+    append_result(0, m50, r, p, score, "BEST")  # 写入结果
+    print(f"预热结果 mAP50={m50:.4f} | Recall={r:.4f} | P={p:.4f}")
 
-            log_experiment_result(exp, m, status, params)
+    # 贝叶斯循环
+    for exp in range(1, MAX_EXPERIMENTS+1):
+        print(f"\n======== 贝叶斯第 {exp}/{MAX_EXPERIMENTS} ========")
+        print(f"当前最佳：mAP50={best_m50:.4f} Recall={best_r:.4f}")
 
-            if no_improve >= MAX_NO_IMPROVE:
-                print("\n连续无提升，停止训练")
-                break
-            if best["cds"] >= STOP_CDS or best["mAP50"] >= STOP_MAP50:
-                print("\n达到目标精度，停止训练")
-                break
+        next_point = optimizer.ask()
+        params = dict(zip([s.name for s in search_space], next_point))
+        apply_params(params)
 
-    except KeyboardInterrupt:
-        print("\n手动停止")
+        run_training(exp)
+        m50, r, p = parse_results()
+        score = m50 + 0.8*r + 0.4*p
+        print(f"本轮结果：mAP50={m50:.4f} Recall={r:.4f} P={p:.4f}")
 
-    save_final_best_model()
+        optimizer.tell(next_point, -score)
+        status = "DISCARD"
 
-    print("\n" + "=" * 50)
-    print("训练全部完成！")
-    print("最终最优指标：")
-    print("CDS: {:.4f}".format(best['cds']))
-    print("mAP50: {:.4f}".format(best['mAP50']))
-    print("Recall: {:.4f}".format(best['Recall']))
-    print("Precision: {:.4f}".format(best['Precision']))
-    print("最优模型：best_final_model/best.pt")
-    print("=" * 50)
+        if score > best_score + 0.0005:
+            best_score = score
+            best_m50, best_r, best_p = m50, r, p
+            no_improve = 0
+            status = "BEST"
+            save_best()
+            print("→ 刷新最优！")
+        else:
+            no_improve += 1
+            print(f"→ 无提升 {no_improve}/{MAX_NO_IMPROVE}")
+
+        append_result(exp, m50, r, p, score, status)  # 写入每一轮结果
+
+        if no_improve >= MAX_NO_IMPROVE:
+            print("\n连续无提升，停止优化")
+            break
+        if best_m50 >= TARGET_MAP50:
+            print("\n达到目标精度")
+            break
+
+    save_final()
+    print("\n完成！最终最优：")
+    print(f"mAP50   : {best_m50:.4f}")
+    print(f"Recall  : {best_r:.4f}")
+    print(f"Precision: {best_p:.4f}")
 
 if __name__ == "__main__":
     main()
