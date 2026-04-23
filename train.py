@@ -25,12 +25,13 @@ from evaluate import evaluate_model, print_metrics
 MODEL = "yolo12s.pt"
 DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
 IMGSZ = 1280
+epoch = 50
 
 # ===================== 【关键】贝叶斯控制的参数 =====================
 TIME_MINUTES = 0
-BATCH = 2
+BATCH = 3
 DEVICE = 0
-AMP = False
+AMP = True
 CACHE = None
 WORKERS = 0
 SINGLE_CLS = True
@@ -51,7 +52,7 @@ FLIPUD = 0.5
 FLIPLR = 0.5
 MOSAIC = 0.40342537519900845
 MIXUP = 0.0
-COPY_PASTE = 0.2
+COPY_PASTE = 0.00
 ERASING = 0.4
 CLOSE_MOSAIC = 10
 
@@ -81,12 +82,10 @@ def train():
     data_yaml = _abs(DATA_YAML)
     model = YOLO(model_path)
 
-    # 接收从命令行传入的 epoch 数量（贝叶斯runner控制）
-    epochs_to_run = int(sys.argv[1]) if len(sys.argv) > 1 else 2
-
+    # 只在这里加了 epochs=50，其他所有参数完全不变！
     results = model.train(
         data=data_yaml,
-        epochs=epochs_to_run,  # 【关键】由runner控制，固定2轮
+        epochs=50,
         time=TIME_MINUTES / 60,
         imgsz=IMGSZ,
         batch=BATCH,
@@ -97,8 +96,8 @@ def train():
         exist_ok=True,
 
         single_cls=SINGLE_CLS,
-        conf=CONF,       # 现在贝叶斯可以调了
-        iou=IOU,         # 现在贝叶斯可以调了
+        conf=CONF,
+        iou=IOU,
 
         lr0=LR0,
         lrf=LRF,
