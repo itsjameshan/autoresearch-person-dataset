@@ -1,0 +1,51 @@
+/* 基本样式保持一致，增加以下内容 */
+.tab-bar {
+    display: flex;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+}
+.tab-btn {
+    flex: 1;
+    padding: 12px;
+    background: none;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    color: #6c757d;
+    cursor: pointer;
+    transition: all 0.2s;
+    border-bottom: 3px solid transparent;
+}
+.tab-btn.active {
+    color: #2d6a4f;
+    border-bottom-color: #2d6a4f;
+}
+.auth-form {
+    display: none;
+}
+.auth-form.active {
+    display: block;
+}
+.auth-btn {
+    width: 100%;
+    padding: 14px;
+    background: linear-gradient(145deg, #2d6a4f, #1f4a38);
+    color: white;
+    border: none;
+    border-radius: 40px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid #5f9b7a;
+}
+.auth-btn:hover {
+    background: linear-gradient(145deg, #1f4a38, #143523);
+    box-shadow: 0 6px 14px rgba(29, 78, 50, 0.25);
+    transform: translateY(-1px);
+}
+.auth-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+/* 其余样式复用原有登录框样式 */

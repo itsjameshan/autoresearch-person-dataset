@@ -1,155 +1,239 @@
 # -*- coding: utf-8 -*-
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 from flask_cors import CORS
 import cv2
 import numpy as np
 import onnxruntime as ort
-from datetime import datetime
 import os
-import sys
 import warnings
 import webbrowser
-import traceback
-import io
 import threading
 import time
 import glob
 import json
 import base64
 import pandas as pd
+from datetime import datetime
+import tempfile
+import shutil
+import zipfile
+from werkzeug.utils import secure_filename
 
 warnings.filterwarnings('ignore')
 
-# Windows 控制台默认 GBK，print(emoji) 会 UnicodeEncodeError
-if sys.platform == "win32":
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, OSError):
-            pass
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 页面与静态资源在 templates/；勿依赖 cwd，否则从别的目录启动会 404
-TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
-
-app = Flask(__name__, static_folder=None)
+app = Flask(__name__, static_folder='static', static_url_path='/static')
 CORS(app)
-app.config['SECRET_KEY'] = 'person_detect'
-app.config['MAX_CONTENT_LENGTH'] = 64 * 1024 * 1024
-MODEL_ROOT_DIR = os.path.join(BASE_DIR, "onnx_data")
-SAVE_ROOT_DIR = os.path.join(BASE_DIR, "result")
+app.config['SECRET_KEY'] = 'person_detect'  # 生产环境请改为随机字符串
+app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
 
+# ==================== 用户数据文件 ====================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USERS_FILE = os.path.join(BASE_DIR, 'users.json')
+
+def load_users():
+    """从文件加载用户字典"""
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_users(users):
+    """保存用户字典到文件"""
+    with open(USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+def init_default_user():
+    """如果用户文件不存在，创建默认管理员账户"""
+    if not os.path.exists(USERS_FILE):
+        default_users = {'admin': 'admin123'}
+        save_users(default_users)
+        print("✅ 已创建默认用户: admin / admin123")
+
+# 在启动时初始化默认用户
+init_default_user()
+
+# ==================== 核心参数（双模型兼容） ====================
+MODEL_ROOT_DIR = os.path.join(BASE_DIR, "onnx_data")
+SAVE_ROOT_DIR = r"D:\pythonProject\person_dataset\result"
 os.makedirs(MODEL_ROOT_DIR, exist_ok=True)
 os.makedirs(SAVE_ROOT_DIR, exist_ok=True)
 
+# 全局变量声明
 model_session = None
 input_name = None
 output_names = None
 current_model_name = "未加载"
-IMG_SIZE = 1280
-PORT = int(os.environ.get("APP_WIN_PORT", "5050"))
-GLOBAL_MERGE_IOU = 0.35
+is_dynamic_model = False
+
+# 固定尺寸模型参数
+FIXED_IMG_SIZE = 1280
+STRIDE = 32
+PORT = 5000
+
+MIN_BOX_W = 15
+MIN_BOX_H = 30
+GLOBAL_NMS_IOU = 0.75
 
 model_lock = threading.Lock()
 
 
+# ==================== 登录拦截器 ====================
+@app.before_request
+def check_login():
+    # 允许访问的路径白名单
+    public_paths = ['/login', '/static', '/api/login', '/api/logout', '/api/register', '/api/check_login', '/health']
+    path = request.path
+    if any(path.startswith(p) for p in public_paths):
+        return None
+    # 检查 session 中是否有 user
+    if 'user' not in session:
+        # 如果是 API 请求，返回 401
+        if path.startswith('/api/'):
+            return jsonify({"error": "未登录"}), 401
+        # 页面请求重定向到登录页
+        return redirect('/login')
+
+
+# ==================== 模型加载（自动识别动态/固定） ====================
 def get_available_models():
     models = []
     if not os.path.exists(MODEL_ROOT_DIR):
+        os.makedirs(MODEL_ROOT_DIR, exist_ok=True)
         return models
     for f in os.listdir(MODEL_ROOT_DIR):
         if f.lower().endswith(".onnx"):
             models.append({"name": f, "path": os.path.join(MODEL_ROOT_DIR, f)})
+    print(f"✅ 找到 {len(models)} 个ONNX模型: {[m['name'] for m in models]}")
     return models
 
 
 def load_model(model_path):
-    global model_session, input_name, output_names, current_model_name
+    global model_session, input_name, output_names, current_model_name, is_dynamic_model
     try:
         with model_lock:
             if model_session:
                 del model_session
-            providers = ["CPUExecutionProvider"]
-            model_session = ort.InferenceSession(model_path, providers=providers)
+                model_session = None
+
+            available_providers = ort.get_available_providers()
+            providers = []
+            if "CUDAExecutionProvider" in available_providers:
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+                print("✅ 启用GPU加速 (CUDA)")
+            else:
+                providers = ["CPUExecutionProvider"]
+                print("⚠️ 未检测到CUDA，使用CPU推理")
+
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            sess_options.enable_profiling = False
+            sess_options.intra_op_num_threads = 8
+
+            model_session = ort.InferenceSession(model_path, sess_options, providers=providers)
+            input_shape = model_session.get_inputs()[0].shape
+            is_dynamic_model = any(s == -1 for s in input_shape)
             input_name = model_session.get_inputs()[0].name
             output_names = [o.name for o in model_session.get_outputs()]
             current_model_name = os.path.basename(model_path)
+            print(f"✅ 模型加载成功: {current_model_name}, 输入形状: {input_shape}, 动态模型: {is_dynamic_model}")
+
         return True, f"✅ 模型加载成功：{current_model_name}"
     except Exception as e:
+        model_session = None
+        print(f"❌ 模型加载失败: {str(e)}")
         return False, f"❌ 加载失败：{str(e)}"
 
 
-# 自动优先加载 yolo12l.onnx
 models = get_available_models()
-target_model = "yolo12l.onnx"
+target_model = "best.onnx"
 loaded = False
 
 for m in models:
     if m["name"] == target_model:
         ok, msg = load_model(m["path"])
-        print(msg)
-        loaded = True
-        break
+        if ok:
+            loaded = True
+            break
 
-if not loaded and models:
-    load_model(models[0]["path"])
+if not loaded:
+    print(f"❌ 错误: 未找到或无法加载 {target_model}，请检查模型！")
+    current_model_name = "未加载"
+else:
+    print(f"✅ 系统启动完成，当前模型: {current_model_name}")
 
-if not models:
-    print("⚠️ 警告: 未找到ONNX模型文件，请将模型放入 onnx_data 目录")
 
-
+# ==================== 预处理（自动适配动态/固定） ====================
 def preprocess(image):
     h, w = image.shape[:2]
-    scale = min(IMG_SIZE / w, IMG_SIZE / h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    resized = cv2.resize(image, (new_w, new_h))
-    pad_w = (IMG_SIZE - new_w) / 2
-    pad_h = (IMG_SIZE - new_h) / 2
-    top = int(np.floor(pad_h))
-    bottom = int(np.ceil(pad_h))
-    left = int(np.floor(pad_w))
-    right = int(np.ceil(pad_w))
-    padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
-    blob = padded.transpose(2, 0, 1).astype(np.float32) / 255.0
-    blob = np.expand_dims(blob, axis=0)
-    return blob, scale, pad_w, pad_h, w, h
+    if is_dynamic_model:
+        scale = min(1920 / w, 1920 / h)
+        new_w = int(round(w * scale / STRIDE) * STRIDE)
+        new_h = int(round(h * scale / STRIDE) * STRIDE)
+        resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        blob = resized.transpose(2, 0, 1).astype(np.float32) / 255.0
+        return blob[None], w, h, new_w, new_h
+    else:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        scale = min(FIXED_IMG_SIZE / w, FIXED_IMG_SIZE / h)
+        new_w, new_h = int(w * scale), int(h * scale)
+        resized = cv2.resize(image, (new_w, new_h))
+        pad_w = (FIXED_IMG_SIZE - new_w) / 2
+        pad_h = (FIXED_IMG_SIZE - new_h) / 2
+        top = int(np.floor(pad_h))
+        bottom = int(np.ceil(pad_h))
+        left = int(np.floor(pad_w))
+        right = int(np.ceil(pad_w))
+        padded = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
+        blob = padded.transpose(2, 0, 1).astype(np.float32) / 255.0
+        return blob[None], scale, pad_w, pad_h, w, h
 
 
+# ==================== xywh转xyxy ====================
 def xywh2xyxy(x):
     y = np.copy(x)
-    y[:, 0] = x[:, 0] - x[:, 2] / 2
-    y[:, 1] = x[:, 1] - x[:, 3] / 2
-    y[:, 2] = x[:, 0] + x[:, 2] / 2
-    y[:, 3] = x[:, 1] + x[:, 3] / 2
+    y[..., 0] = x[..., 0] - x[..., 2] / 2
+    y[..., 1] = x[..., 1] - x[..., 3] / 2
+    y[..., 2] = x[..., 0] + x[..., 2] / 2
+    y[..., 3] = x[..., 1] + x[..., 3] / 2
     return y
 
 
-def postprocess(outputs, scale, pad_w, pad_h, w, h, conf_thres, iou_thres):
+# ==================== 后处理（自动适配动态/固定） ====================
+def postprocess(outputs, conf_thres, *args):
+    scale, pad_w, pad_h, w, h = args
+    # outputs[0] shape: (1, 5, 33600)  -> 转置成 (33600, 5)
     pred = outputs[0][0].T
-    conf = pred[:, 4]
-    keep = conf >= conf_thres
+
+    # 5列含义：cx, cy, bw, bh, obj_conf
+    obj_conf = pred[:, 4]
+    keep = obj_conf >= conf_thres
     boxes = pred[keep, :4]
     scores = pred[keep, 4]
-    if len(boxes) == 0:
-        return []
-
-    boxes = xywh2xyxy(boxes)
 
     if len(boxes) == 0:
         return []
 
-    indices = cv2.dnn.NMSBoxes(boxes.tolist(), scores.tolist(), conf_thres, iou_thres)
-    if indices is None or len(indices) == 0:
+    # 将 cx,cy,w,h 转为 xyxy
+    boxes_xyxy = xywh2xyxy(boxes)
+
+    # NMS
+    indices = cv2.dnn.NMSBoxes(
+        boxes_xyxy.tolist(),
+        scores.tolist(),
+        conf_thres,
+        GLOBAL_NMS_IOU
+    )
+    if len(indices) == 0:
         return []
 
-    if isinstance(indices, tuple):
-        indices = indices[0]
-    elif len(indices.shape) > 1:
-        indices = indices.flatten()
-
+    indices = indices.flatten()
     dets = []
     for i in indices:
-        x1, y1, x2, y2 = boxes[i]
+        x1, y1, x2, y2 = boxes_xyxy[i]
+        # 将归一化坐标（相对于1280x1280）还原到原图尺寸
         x1 = (x1 - pad_w) / scale
         y1 = (y1 - pad_h) / scale
         x2 = (x2 - pad_w) / scale
@@ -160,113 +244,24 @@ def postprocess(outputs, scale, pad_w, pad_h, w, h, conf_thres, iou_thres):
         x2 = max(0, min(int(x2), w))
         y2 = max(0, min(int(y2), h))
 
-        dets.append({
-            "x1": int(x1), "y1": int(y1),
-            "x2": int(x2), "y2": int(y2),
-            "conf": round(float(scores[i]), 3),
-            "class_name": "person"
-        })
+        box_w = x2 - x1
+        box_h = y2 - y1
+        if box_w < MIN_BOX_W or box_h < MIN_BOX_H:
+            continue
+
+        dets.append([x1, y1, x2, y2, scores[i]])
     return dets
 
 
-def nms_xyxy(boxes, scores, iou_threshold):
-    """boxes: Nx4 xyxy, scores: N. Returns list of kept indices."""
-    if len(boxes) == 0:
-        return []
-    boxes = np.asarray(boxes, dtype=np.float32)
-    scores = np.asarray(scores, dtype=np.float32)
-    idxs = np.argsort(scores)[::-1]
-    keep = []
-    while idxs.size > 0:
-        current = int(idxs[0])
-        keep.append(current)
-        if idxs.size == 1:
-            break
-        rest = idxs[1:]
-        bc = boxes[current]
-        xx1 = np.maximum(bc[0], boxes[rest, 0])
-        yy1 = np.maximum(bc[1], boxes[rest, 1])
-        xx2 = np.minimum(bc[2], boxes[rest, 2])
-        yy2 = np.minimum(bc[3], boxes[rest, 3])
-        w = np.maximum(0.0, xx2 - xx1)
-        h = np.maximum(0.0, yy2 - yy1)
-        inter = w * h
-        area_c = (bc[2] - bc[0]) * (bc[3] - bc[1])
-        area_r = (boxes[rest, 2] - boxes[rest, 0]) * (boxes[rest, 3] - boxes[rest, 1])
-        union = area_c + area_r - inter
-        iou = inter / (union + 1e-6)
-        idxs = rest[iou <= iou_threshold]
-    return keep
-
-
-def run_inference_tile(img_bgr, conf, iou):
-    """单块 BGR 推理，返回 persons 列表（与 postprocess 一致）。"""
-    if model_session is None:
-        return []
-    with model_lock:
-        blob, scale, pw, ph, w, h = preprocess(img_bgr)
-        outs = model_session.run(output_names, {input_name: blob})
-        return postprocess(outs, scale, pw, ph, w, h, conf, iou)
-
-
-def iter_sliding_tiles(img_bgr, tile_size, overlap):
-    h, w = img_bgr.shape[:2]
-    overlap = max(0, min(int(overlap), tile_size - 1))
-    stride = max(1, tile_size - overlap)
-    for y0 in range(0, h, stride):
-        for x0 in range(0, w, stride):
-            x1 = min(x0 + tile_size, w)
-            y1 = min(y0 + tile_size, h)
-            if x1 <= x0 or y1 <= y0:
-                continue
-            yield x0, y0, img_bgr[y0:y1, x0:x1]
-
-
-def merge_tiles_global_nms(payload, merge_iou):
-    orig_w = int(payload["orig_w"])
-    orig_h = int(payload["orig_h"])
-    all_boxes = []
-    all_scores = []
-    for t in payload.get("tiles", []):
-        x0, y0 = int(t["x0"]), int(t["y0"])
-        for p in t.get("persons", []):
-            all_boxes.append([
-                float(p["x1"]) + x0,
-                float(p["y1"]) + y0,
-                float(p["x2"]) + x0,
-                float(p["y2"]) + y0,
-            ])
-            all_scores.append(float(p["conf"]))
-    if not all_boxes:
-        return [], orig_w, orig_h
-    boxes = np.array(all_boxes, dtype=np.float32)
-    scores = np.array(all_scores, dtype=np.float32)
-    keep = nms_xyxy(boxes, scores, float(merge_iou))
-    merged = [(boxes[i].copy(), float(scores[i])) for i in keep]
-    return merged, orig_w, orig_h
-
-
-def merged_boxes_to_yolo_txt(merged_pairs, orig_w, orig_h):
-    lines = []
-    ow, oh = float(orig_w), float(orig_h)
-    for b, _s in merged_pairs:
-        x1, y1, x2, y2 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
-        cx = ((x1 + x2) / 2) / ow
-        cy = ((y1 + y2) / 2) / oh
-        nw = (x2 - x1) / ow
-        nh = (y2 - y1) / oh
-        lines.append(f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}")
-    return "\n".join(lines)
-
-
+# ==================== base64编码 ====================
 def to_base64(img):
     _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return f"data:image/jpeg;base64,{base64.b64encode(buf).decode()}"
 
 
+# ==================== 检测函数（双模型兼容） ====================
 def detect_img_bytes(img_bytes, conf=0.5, iou=0.5):
     global model_session
-
     if model_session is None:
         return None, "模型未加载"
 
@@ -276,42 +271,102 @@ def detect_img_bytes(img_bytes, conf=0.5, iou=0.5):
         return None, "图片无效"
 
     t0 = time.time()
-
     with model_lock:
-        if model_session is None:
-            return None, "模型未加载"
-        blob, scale, pw, ph, w, h = preprocess(img)
-        outs = model_session.run(output_names, {input_name: blob})
-        persons = postprocess(outs, scale, pw, ph, w, h, conf, iou)
+        if is_dynamic_model:
+            blob, orig_w, orig_h, new_w, new_h = preprocess(img)
+            outs = model_session.run(output_names, {input_name: blob})
+            dets = postprocess(outs, conf, orig_w, orig_h, new_w, new_h)
+        else:
+            blob, scale, pw, ph, w, h = preprocess(img)
+            outs = model_session.run(output_names, {input_name: blob})
+            dets = postprocess(outs, conf, scale, pw, ph, w, h)
 
+    # ====================== 【我加的打印，不影响任何逻辑】 ======================
+    print("\n📌 快速诊断打印 ↓")
+    print(f"模型输出结果数量 (outs): {len(outs)}")
+    print(f"后处理输出框数量 (dets): {len(dets)}")
+    # ==========================================================================
+    persons = []
+    if dets:
+        for x1, y1, x2, y2, score in dets:
+            persons.append({
+                "x1": int(x1), "y1": int(y1),
+                "x2": int(x2), "y2": int(y2),
+                "conf": round(float(score), 3),
+                "class_name": "person"
+            })
+
+    out_img = img.copy()
     for p in persons:
-        cv2.rectangle(img, (p["x1"], p["y1"]), (p["x2"], p["y2"]), (0, 255, 0), 2)
-        cv2.putText(img, f"person {p['conf']:.2f}", (p["x1"], p["y1"] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.rectangle(out_img, (p["x1"], p["y1"]), (p["x2"], p["y2"]), (0, 255, 0), 2)
 
+    print(f"✅ 检测完成，耗时: {round(time.time() - t0, 3)}s，检测到: {len(persons)}人")
     return {
         "count": len(persons),
         "persons": persons,
-        "image_data": to_base64(img),
+        "image_data": to_base64(out_img),
         "infer_time": round(time.time() - t0, 3)
     }, None
 
-
-@app.route("/")
+# ==================== 接口 ====================
+@app.route('/')
 def index():
-    return send_from_directory(TEMPLATE_DIR, "index.html")
+    return send_from_directory('static', 'index.html')
 
 
-@app.route("/templates/<path:filename>")
-def serve_templates(filename):
-    return send_from_directory(TEMPLATE_DIR, filename)
+@app.route('/login')
+def login_page():
+    return send_from_directory('static', 'login.html')
 
 
-@app.route('/api/config', methods=['GET'])
-def api_config():
-    """供前端拼出本机 images 子目录绝对路径（随仓库位置迁移，勿写死盘符）。"""
-    root = os.path.join(BASE_DIR, "images")
-    return jsonify({"images_root": root.replace("\\", "/")})
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    users = load_users()
+    if username in users and users[username] == password:
+        session['user'] = username
+        return jsonify({"ok": True, "msg": "登录成功"})
+    else:
+        return jsonify({"ok": False, "msg": "用户名或密码错误"}), 401
+
+@app.route('/api/check_login', methods=['GET'])
+def check_login_status():
+    if 'user' in session:
+        return jsonify({"logged_in": True, "user": session['user']})
+    else:
+        return jsonify({"logged_in": False})
+
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.get_json()
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    if not username or not password:
+        return jsonify({"ok": False, "msg": "用户名和密码不能为空"}), 400
+    if len(username) < 3 or len(password) < 6:
+        return jsonify({"ok": False, "msg": "用户名至少3位，密码至少6位"}), 400
+
+    users = load_users()
+    if username in users:
+        return jsonify({"ok": False, "msg": "用户名已存在"}), 409
+
+    users[username] = password
+    save_users(users)
+    return jsonify({"ok": True, "msg": "注册成功，请登录"})
+
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    session.pop('user', None)
+    return jsonify({"ok": True, "msg": "已退出登录"})
+
+
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory('static', filename)
 
 
 @app.route('/get_models')
@@ -320,6 +375,7 @@ def get_models():
         "models": get_available_models(),
         "current": current_model_name
     })
+
 
 @app.route('/switch_model', methods=['POST'])
 def switch_model():
@@ -336,6 +392,7 @@ def switch_model():
     ok, msg = load_model(path)
     return jsonify({"ok": ok, "msg": msg})
 
+
 @app.route('/detect_single', methods=['POST'])
 def detect_single():
     try:
@@ -343,17 +400,11 @@ def detect_single():
             return jsonify({"error": "未上传图片"})
 
         f = request.files['image']
-        if f.filename == '':
-            return jsonify({"error": "未选择文件"})
-
-        conf = float(request.form.get('conf', 0.5))
-        iou = float(request.form.get('iou', 0.5))
-
-        conf = max(0, min(1, conf))
-        iou = max(0, min(1, iou))
+        # 固定置信度和 IoU 为 0.3
+        conf = 0.3
+        iou = 0.3
 
         res, err = detect_img_bytes(f.read(), conf, iou)
-
         if err:
             return jsonify({"error": err})
         return jsonify(res)
@@ -361,94 +412,57 @@ def detect_single():
         return jsonify({"error": f"检测异常: {str(e)}"})
 
 
-# ==================== ✅ 最终修复：文件夹检测（显示图片 + 实时进度条） ====================
 @app.route('/detect_folder', methods=['POST'])
 def detect_folder():
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({"error": "无效请求数据", "results": [], "total": 0, "total_count": 0, "progress": 100})
-
         folder = data.get('folder_path', '').strip()
-        conf = float(data.get('conf', 0.5))
-        iou = float(data.get('iou', 0.5))
+        # 固定置信度和 IoU 为 0.3，忽略前端传递的值
+        conf = 0.08
+        iou = 0.75
 
-        conf = max(0, min(1, conf))
-        iou = max(0, min(1, iou))
-
-        if not folder or not os.path.isdir(folder):
-            return jsonify({"error": "文件夹不存在", "results": [], "total": 0, "total_count": 0, "progress": 100})
+        if not os.path.isdir(folder):
+            return jsonify({"error": "文件夹不存在", "results": []})
 
         exts = ['*.jpg', '*.jpeg', '*.png', '*.bmp']
         img_paths = []
-        seen = set()
         for ext in exts:
-            for p in glob.glob(os.path.join(folder, ext)):
-                k = os.path.basename(p).lower()
-                if k not in seen:
-                    seen.add(k)
-                    img_paths.append(p)
+            img_paths += glob.glob(os.path.join(folder, '**', ext), recursive=True)
 
         if not img_paths:
-            return jsonify({"error": "无图片", "results": [], "total": 0, "total_count": 0, "progress": 100})
+            return jsonify({"error": "无图片", "results": []})
 
-        total = len(img_paths)
         results = []
         total_count = 0
-
-        for idx, path in enumerate(img_paths):
+        for path in img_paths:
             try:
                 with open(path, 'rb') as f:
                     res, err = detect_img_bytes(f.read(), conf, iou)
-                    progress = int((idx + 1) / total * 100)
-
                     if err:
-                        item = {
-                            "name": os.path.basename(path),
-                            "count": 0,
-                            "persons": [],
-                            "image_data": "",
-                            "progress": progress
-                        }
+                        results.append({"name": os.path.basename(path), "count": 0, "persons": [], "image_data": ""})
                     else:
-                        item = {
-                            "name": os.path.basename(path),
-                            "count": res["count"],
-                            "persons": res["persons"],
-                            "image_data": res["image_data"],
-                            "progress": progress
-                        }
+                        results.append({"name": os.path.basename(path), **res})
                         total_count += res["count"]
-
-                    results.append(item)
+                        json_save_path = os.path.splitext(path)[0] + '.json'
+                        with open(json_save_path, 'w', encoding='utf-8') as jf:
+                            json.dump(res["persons"], jf, ensure_ascii=False, indent=2)
             except:
-                results.append({
-                    "name": os.path.basename(path),
-                    "count": 0,
-                    "persons": [],
-                    "image_data": "",
-                    "progress": int((idx + 1) / total * 100)
-                })
+                results.append({"name": os.path.basename(path), "count": 0, "persons": [], "image_data": ""})
 
         return jsonify({
             "results": results,
-            "total": total,
+            "total": len(img_paths),
             "total_count": total_count,
-            "error": None,
-            "progress": 100
+            "error": None
         })
-
     except Exception as e:
-        return jsonify({"error": f"异常：{str(e)}", "results": [], "total": 0, "total_count": 0, "progress": 100})
+        return jsonify({"error": f"异常：{str(e)}", "results": []})
 
 
 @app.route('/save_results', methods=['POST'])
 def save_results():
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({"success": False, "msg": "无效请求数据"})
-
         persons = data.get('persons', [])
         img_b64 = data.get('image_base64', '')
 
@@ -456,39 +470,20 @@ def save_results():
             return jsonify({"success": False, "msg": "没有检测结果可保存"})
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
         json_path = os.path.join(SAVE_ROOT_DIR, f"result_{ts}.json")
-        with open(json_path, 'w', encoding='utf-8') as f:
+        with open(json_path, 'w', encoding='utf-8', newline='') as f:
             json.dump(persons, f, ensure_ascii=False, indent=2)
 
         csv_rows = [{
-            "id": i + 1,
-            "class": p.get("class_name", "person"),
-            "conf": p.get("conf", 0),
-            "x1": p.get("x1", 0),
-            "y1": p.get("y1", 0),
-            "x2": p.get("x2", 0),
-            "y2": p.get("y2", 0)
+            "id": i + 1, "class": p["class_name"], "conf": p["conf"],
+            "x1": p["x1"], "y1": p["y1"], "x2": p["x2"], "y2": p["y2"]
         } for i, p in enumerate(persons)]
+        pd.DataFrame(csv_rows).to_csv(os.path.join(SAVE_ROOT_DIR, f"result_{ts}.csv"), index=False,
+                                      encoding='utf-8-sig')
 
-        csv_path = os.path.join(SAVE_ROOT_DIR, f"result_{ts}.csv")
-        pd.DataFrame(csv_rows).to_csv(csv_path, index=False, encoding='utf-8-sig')
-
-        img_path = None
-        if img_b64 and 'base64,' in img_b64:
-            try:
-                img_data = base64.b64decode(img_b64.split(',')[1])
-                nparr = np.frombuffer(img_data, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                if img is not None:
-                    img_path = os.path.join(SAVE_ROOT_DIR, f"result_{ts}.jpg")
-                    cv2.imwrite(img_path, img)
-            except Exception as e:
-                print(f"图片保存失败: {e}")
-
-        return jsonify({"success": True, "msg": f"保存成功，已保存到 {SAVE_ROOT_DIR}"})
+        return jsonify({"success": True, "msg": f"保存成功：{SAVE_ROOT_DIR}"})
     except Exception as e:
-        return jsonify({"success": False, "msg": f"保存失败: {str(e)}"})
+        return jsonify({"success": False, "msg": f"保存失败：{str(e)}"})
 
 
 @app.route('/health', methods=['GET'])
@@ -496,177 +491,493 @@ def health():
     return jsonify({
         "status": "ok",
         "model_loaded": model_session is not None,
-        "current_model": current_model_name,
-        "models_available": len(get_available_models())
+        "current": current_model_name,
+        "models_available": len(get_available_models()),
+        "is_dynamic": is_dynamic_model
     })
 
 
-@app.route("/a")
-def pipeline_page_a():
-    return send_from_directory(TEMPLATE_DIR, "page_a.html")
+# ==================== 裁剪核心函数（供多个接口复用） ====================
+def crop_images(src_folder, dst_folder, tile_size, overlap, filter_empty):
+    """裁剪核心逻辑，返回 (total_tiles, mapping_path)"""
+    mapping_records = []
+    total_tiles = 0
 
+    exts = ('*.jpg', '*.jpeg', '*.png', '*.bmp')
+    img_paths = []
+    for ext in exts:
+        img_paths.extend(glob.glob(os.path.join(src_folder, ext)))
 
-@app.route("/b")
-def pipeline_page_b():
-    return send_from_directory(TEMPLATE_DIR, "page_b.html")
+    print(f"🔍 裁剪核心：找到 {len(img_paths)} 个图片文件")
 
-
-@app.route('/api/pipeline_a', methods=['POST'])
-def api_pipeline_a():
-    if 'image' not in request.files:
-        return jsonify({'error': '未上传图片'}), 400
-    f = request.files['image']
-    if not f.filename:
-        return jsonify({'error': '空文件名'}), 400
-    try:
-        overlap = int(request.form.get('overlap', 200))
-    except ValueError:
-        overlap = 200
-    overlap = max(0, min(overlap, IMG_SIZE - 1))
-    try:
-        conf = float(request.form.get('conf', 0.35))
-        iou = float(request.form.get('iou', 0.25))
-    except ValueError:
-        conf, iou = 0.35, 0.25
-    conf = max(0.0, min(1.0, conf))
-    iou = max(0.0, min(1.0, iou))
-
-    try:
-        nparr = np.frombuffer(f.read(), np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    for img_path in img_paths:
+        with open(img_path, 'rb') as f:
+            img_bytes = f.read()
+        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
-            return jsonify({'error': '图片解码失败'}), 400
-        if model_session is None:
-            return jsonify({'error': '模型未加载'}), 503
+            print(f"⚠️ 无法解码图片: {img_path}")
+            continue
 
-        H, W = img.shape[:2]
-        stride = max(1, IMG_SIZE - overlap)
-        tiles_out = []
-        sum_raw = 0
-        idx = 0
+        h, w = img.shape[:2]
+        base_name = os.path.splitext(os.path.basename(img_path))[0]
+        stand_folder = os.path.join(dst_folder, base_name)
+        os.makedirs(stand_folder, exist_ok=True)
 
-        for x0, y0, tile in iter_sliding_tiles(img, IMG_SIZE, overlap):
-            persons = run_inference_tile(tile, conf, iou)
-            th, tw = tile.shape[:2]
-            sum_raw += len(persons)
-            tiles_out.append({
-                'index': idx,
-                'x0': x0,
-                'y0': y0,
-                'w': tw,
-                'h': th,
-                'persons': persons,
-                'count': len(persons),
-            })
-            idx += 1
+        stride = tile_size - overlap
+
+        if h < tile_size or w < tile_size:
+            y_steps = [0]
+            x_steps = [0]
+        else:
+            y_steps = list(range(0, h - tile_size + 1, stride))
+            if y_steps and y_steps[-1] + tile_size < h:
+                y_steps.append(h - tile_size)
+            x_steps = list(range(0, w - tile_size + 1, stride))
+            if x_steps and x_steps[-1] + tile_size < w:
+                x_steps.append(w - tile_size)
+
+        for i, y in enumerate(y_steps):
+            for j, x in enumerate(x_steps):
+                y_end = min(y + tile_size, h)
+                x_end = min(x + tile_size, w)
+                tile = img[y:y_end, x:x_end]
+                tile_name = f"{base_name}_{i}_{j}_{x}_{y}.jpg"
+                tile_path = os.path.join(stand_folder, tile_name)
+
+                is_empty = False
+                if filter_empty:
+                    gray = cv2.cvtColor(tile, cv2.COLOR_BGR2GRAY)
+                    if np.var(gray) < 30:
+                        is_empty = True
+
+                if is_empty:
+                    continue
+
+                _, buf = cv2.imencode('.jpg', tile)
+                with open(tile_path, 'wb') as f_out:
+                    f_out.write(buf)
+
+                total_tiles += 1
+                mapping_records.append({
+                    "stand": base_name,
+                    "tile": tile_name,
+                    "x_offset": x,
+                    "y_offset": y
+                })
+
+    mapping_df = pd.DataFrame(mapping_records)
+    mapping_path = os.path.join(dst_folder, "crop_mapping.xlsx")
+    mapping_df.to_excel(mapping_path, index=False)
+
+    print(f"✅ 裁剪核心完成，共生成 {total_tiles} 张小图，映射表：{mapping_path}")
+    return total_tiles, mapping_path
+
+
+# ==================== 裁剪 API（手动路径版本，保留兼容） ====================
+@app.route('/api/crop', methods=['POST'])
+def api_crop():
+    try:
+        data = request.get_json()
+        src_folder = data.get('src_folder', '').strip()
+        dst_folder = data.get('dst_folder', '').strip()
+        overlap = int(data.get('overlap', 200))
+        tile_size = int(data.get('tile_size', 1280))
+        filter_empty = data.get('filter_empty', True)
+
+        print(f"\n📂 裁剪任务开始（手动路径）")
+        print(f"   源文件夹: {src_folder}")
+        print(f"   输出文件夹: {dst_folder}")
+
+        if not os.path.isdir(src_folder):
+            return jsonify({"ok": False, "msg": "源文件夹不存在"})
+
+        os.makedirs(dst_folder, exist_ok=True)
+
+        total_tiles, mapping_path = crop_images(src_folder, dst_folder, tile_size, overlap, filter_empty)
 
         return jsonify({
-            'orig_w': W,
-            'orig_h': H,
-            'tile_size': IMG_SIZE,
-            'overlap': overlap,
-            'stride': stride,
-            'conf': conf,
-            'iou': iou,
-            'tiles': tiles_out,
-            'sum_raw': sum_raw,
+            "ok": True,
+            "total_tiles": total_tiles,
+            "mapping_file": mapping_path,
+            "dst_folder": dst_folder
         })
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ 裁剪过程出错: {str(e)}")
+        return jsonify({"ok": False, "msg": f"裁剪过程出错: {str(e)}"})
 
 
-@app.route('/api/pipeline_b', methods=['POST'])
-def api_pipeline_b():
-    merge_iou = GLOBAL_MERGE_IOU
-    image_bytes = None
-    data = None
-
-    if request.is_json:
-        data = request.get_json(silent=True)
-        if not data:
-            return jsonify({'error': '无效 JSON'}), 400
-        merge_iou = float(data.get('merge_iou', GLOBAL_MERGE_IOU))
-        b64 = data.get('image_base64')
-        if b64:
-            s = b64.split(',', 1)[-1] if isinstance(b64, str) else ''
-            try:
-                image_bytes = base64.b64decode(s)
-            except Exception:
-                return jsonify({'error': 'image_base64 无效'}), 400
-    else:
-        raw = request.form.get('payload')
-        if not raw:
-            return jsonify({'error': '缺少表单字段 payload（JSON 字符串）'}), 400
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            return jsonify({'error': f'payload 非合法 JSON: {e}'}), 400
-        try:
-            merge_iou = float(request.form.get('merge_iou', GLOBAL_MERGE_IOU))
-        except ValueError:
-            merge_iou = GLOBAL_MERGE_IOU
-        if 'image' in request.files and request.files['image'].filename:
-            image_bytes = request.files['image'].read()
-
-    if not isinstance(data, dict) or 'tiles' not in data:
-        return jsonify({'error': 'JSON 须包含 tiles'}), 400
-
+# ==================== 上传文件夹并裁剪（本地文件夹选择版，固定目录） ====================
+@app.route('/api/upload_and_crop', methods=['POST'])
+def upload_and_crop():
     try:
-        merged, ow, oh = merge_tiles_global_nms(data, merge_iou)
-        yolo_txt = merged_boxes_to_yolo_txt(merged, ow, oh)
-        count = len(merged)
+        files = request.files.getlist('images')
+        if not files:
+            return jsonify({"ok": False, "msg": "未接收到文件"})
 
-        out = {
-            'count': count,
-            'merged_count': count,
-            'sum_raw_hint': data.get('sum_raw'),
-            'yolo_txt': yolo_txt,
-            'merge_iou': merge_iou,
-            'orig_w': ow,
-            'orig_h': oh,
-        }
+        # 固定根目录
+        root_dir = r"D:\pythonProject\person_dataset\rentoujieguo"
+        os.makedirs(root_dir, exist_ok=True)
 
-        df = pd.DataFrame([{
-            'total_persons': count,
-            'orig_w': ow,
-            'orig_h': oh,
-            'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }])
-        csv_buf = io.StringIO()
-        df.to_csv(csv_buf, index=False)
-        out['csv_base64'] = base64.b64encode(
-            csv_buf.getvalue().encode('utf-8')
-        ).decode('utf-8')
+        # 生成项目文件夹名（例如：项目_20260421_131536）
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_name = f"项目_{timestamp}"
+        project_dir = os.path.join(root_dir, project_name)
+        os.makedirs(project_dir, exist_ok=True)
 
-        if image_bytes:
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            vis = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if vis is None:
-                out['image_error'] = '原图解码失败，跳过画框'
-            else:
-                ih, iw = vis.shape[:2]
-                for b, sc in merged:
-                    x1 = int(np.clip(b[0], 0, iw - 1))
-                    y1 = int(np.clip(b[1], 0, ih - 1))
-                    x2 = int(np.clip(b[2], 0, iw - 1))
-                    y2 = int(np.clip(b[3], 0, ih - 1))
-                    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(
-                        vis, f'{sc:.2f}', (x1, max(0, y1 - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1,
-                    )
-                out['image_data'] = to_base64(vis)
+        # 创建子文件夹
+        src_folder = os.path.join(project_dir, "原始大图")
+        dst_folder = os.path.join(project_dir, "裁剪结果")
+        os.makedirs(src_folder, exist_ok=True)
+        os.makedirs(dst_folder, exist_ok=True)
 
-        return jsonify(out)
+        saved_count = 0
+        for file in files:
+            if file.filename:
+                filename = secure_filename(os.path.basename(file.filename))
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                    file.save(os.path.join(src_folder, filename))
+                    saved_count += 1
+                else:
+                    print(f"⚠️ 跳过非图片文件：{file.filename}")
+
+        if saved_count == 0:
+            shutil.rmtree(project_dir, ignore_errors=True)
+            return jsonify({"ok": False, "msg": "上传的文件中没有有效图片"})
+
+        tile_size = int(request.form.get('tile_size', 1280))
+        overlap = int(request.form.get('overlap', 200))
+        filter_empty = request.form.get('filter_empty', 'true') == 'true'
+
+        total_tiles, mapping_path = crop_images(src_folder, dst_folder, tile_size, overlap, filter_empty)
+
+        return jsonify({
+            "ok": True,
+            "total_tiles": total_tiles,
+            "mapping_file": mapping_path,
+            "dst_folder": dst_folder,
+            "src_folder": src_folder,
+            "timestamp": timestamp,
+            "work_root": project_dir      # 项目根目录
+        })
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ 上传裁剪出错: {str(e)}")
+        return jsonify({"ok": False, "msg": f"处理失败: {str(e)}"})
+
+
+@app.route('/api/upload_folder_for_detect', methods=['POST'])
+def upload_folder_for_detect():
+    """上传文件夹用于检测，返回服务器临时目录路径"""
+    try:
+        files = request.files.getlist('images')
+        if not files:
+            return jsonify({"ok": False, "msg": "未接收到文件"})
+
+        root_dir = r"D:\pythonProject\person_dataset\rentoujieguo"
+        os.makedirs(root_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_name = f"项目_检测_{timestamp}"
+        project_dir = os.path.join(root_dir, project_name)
+        upload_dir = os.path.join(project_dir, "原始图片")
+        os.makedirs(upload_dir, exist_ok=True)
+
+        saved_count = 0
+        for file in files:
+            if file.filename:
+                filename = secure_filename(os.path.basename(file.filename))
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                    save_path = os.path.join(upload_dir, filename)
+                    file.save(save_path)
+                    saved_count += 1
+                else:
+                    print(f"⚠️ 跳过非图片文件：{filename}")
+
+        if saved_count == 0:
+            shutil.rmtree(project_dir, ignore_errors=True)
+            return jsonify({"ok": False, "msg": "上传的文件中没有有效图片"})
+
+        print(f"📁 检测文件夹已上传至: {upload_dir}，共 {saved_count} 张图片")
+        return jsonify({
+            "ok": True,
+            "uploaded_path": upload_dir,
+            "file_count": saved_count,
+            "timestamp": timestamp,
+            "work_root": project_dir
+        })
+    except Exception as e:
+        print(f"❌ 上传检测文件夹出错: {str(e)}")
+        return jsonify({"ok": False, "msg": f"上传失败: {str(e)}"})
+
+
+# ==================== 上传裁剪（旧版，保留兼容） ====================
+@app.route('/api/crop_upload', methods=['POST'])
+def api_crop_upload():
+    try:
+        files = request.files.getlist('images')
+        dst_folder = request.form.get('dst_folder', '').strip()
+        overlap = int(request.form.get('overlap', 200))
+        tile_size = int(request.form.get('tile_size', 1280))
+        filter_empty = request.form.get('filter_empty', 'true') == 'true'
+
+        if not files or len(files) == 0:
+            return jsonify({"ok": False, "msg": "未接收到图片文件"})
+        if not dst_folder:
+            return jsonify({"ok": False, "msg": "请填写输出目录"})
+
+        temp_src = tempfile.mkdtemp(prefix='crop_upload_')
+        print(f"📁 临时目录：{temp_src}")
+
+        saved_count = 0
+        for file in files:
+            if file.filename:
+                filename = os.path.basename(file.filename)
+                if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp')):
+                    save_path = os.path.join(temp_src, filename)
+                    file.save(save_path)
+                    saved_count += 1
+                else:
+                    print(f"⚠️ 跳过非图片文件：{file.filename}")
+
+        if saved_count == 0:
+            shutil.rmtree(temp_src, ignore_errors=True)
+            return jsonify({"ok": False, "msg": "上传的文件中没有有效图片"})
+
+        print(f"📸 已保存 {saved_count} 张图片到临时目录，开始裁剪...")
+
+        total_tiles, mapping_path = crop_images(temp_src, dst_folder, tile_size, overlap, filter_empty)
+
+        shutil.rmtree(temp_src, ignore_errors=True)
+        try:
+            shutil.rmtree(temp_src)
+            print(f"🧹 临时目录 {temp_src} 已清理")
+        except Exception as e:
+            print(f"⚠️ 临时目录 {temp_src} 清理失败: {str(e)}")
+
+        return jsonify({
+            "ok": True,
+            "total_tiles": total_tiles,
+            "mapping_file": mapping_path,
+            "dst_folder": dst_folder
+        })
+    except Exception as e:
+        print(f"❌ 上传裁剪出错: {str(e)}")
+        return jsonify({"ok": False, "msg": f"上传裁剪出错: {str(e)}"})
+
+
+# ==================== 重建 API ====================
+@app.route('/api/rebuild', methods=['POST'])
+def api_rebuild():
+    try:
+        data = request.get_json()
+        detect_folder = data.get('detect_result_folder', '').strip()
+        mapping_file = data.get('mapping_file', '').strip()
+        original_folder = data.get('original_img_folder', '').strip()
+        output_folder = data.get('output_folder', '').strip()
+        nms_iou = float(data.get('nms_iou', 0.4))
+        skip_nms = data.get('skip_nms', False)
+
+        output_folder = os.path.abspath(output_folder)
+
+        print(f"\n🗺️ 重建任务开始")
+        print(f"   检测结果文件夹: {detect_folder}")
+        print(f"   映射文件: {mapping_file}")
+        print(f"   原始大图文件夹: {original_folder}")
+        print(f"   输出目录: {output_folder}")
+        print(f"   NMS 阈值: {nms_iou}")
+        print(f"   跳过 NMS: {skip_nms}")
+
+        if not os.path.isdir(detect_folder):
+            return jsonify({"ok": False, "msg": "检测结果文件夹不存在"})
+        if not os.path.isfile(mapping_file):
+            return jsonify({"ok": False, "msg": "映射文件不存在"})
+        if not os.path.isdir(original_folder):
+            return jsonify({"ok": False, "msg": "原始大图文件夹不存在"})
+
+        os.makedirs(output_folder, exist_ok=True)
+
+        df_map = pd.read_excel(mapping_file)
+
+        all_boxes = []
+        json_count = 0
+        used_flat_mode = False
+
+        for _, row in df_map.iterrows():
+            stand = row['stand']                # 正确的看台名称
+            tile_name = row['tile']
+            x_off = row['x_offset']
+            y_off = row['y_offset']
+
+            # 1. 先尝试标准目录结构：detect_folder/stand/tile_name.json
+            json_path = os.path.join(detect_folder, stand, tile_name.replace('.jpg', '.json'))
+
+            # 2. 若不存在，尝试平铺模式：detect_folder/tile_name.json（去掉子文件夹）
+            if not os.path.exists(json_path):
+                json_path_flat = os.path.join(detect_folder, tile_name.replace('.jpg', '.json'))
+                if os.path.exists(json_path_flat):
+                    json_path = json_path_flat
+                    used_flat_mode = True
+                else:
+                    continue
+
+            json_count += 1
+
+            with open(json_path, 'r', encoding='utf-8') as f:
+                dets = json.load(f)
+
+            for d in dets:
+                x1 = d['x1'] + x_off
+                y1 = d['y1'] + y_off
+                x2 = d['x2'] + x_off
+                y2 = d['y2'] + y_off
+                all_boxes.append({
+                    'stand': stand,          # 使用映射表中的看台名
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                    'conf': d['conf']
+                })
+
+        if used_flat_mode:
+            print("📌 检测结果采用平铺模式（JSON 位于根目录）")
+        print(f"📁 读取了 {json_count} 个 JSON 文件，总计 {len(all_boxes)} 个检测框（还原前）")
+
+        if not all_boxes:
+            return jsonify({"ok": False, "msg": "未找到任何检测结果"})
+
+        df_all = pd.DataFrame(all_boxes)
+        summary = []
+
+        print(f"📊 检测到 {len(df_all['stand'].unique())} 个看台")
+
+        for stand, group in df_all.groupby('stand'):
+            boxes = group[['x1', 'y1', 'x2', 'y2']].values.astype(float)
+            scores = group['conf'].values.astype(float)
+            boxes_before = len(boxes)
+
+            if not skip_nms:
+                indices = cv2.dnn.NMSBoxes(boxes.tolist(), scores.tolist(), score_threshold=0.25, nms_threshold=nms_iou)
+                if len(indices) > 0:
+                    indices = indices.flatten()
+                    final_boxes = boxes[indices]
+                    final_scores = scores[indices]
+                else:
+                    final_boxes = []
+                    final_scores = []
+            else:
+                final_boxes = boxes
+                final_scores = scores
+
+            print(f"  看台 '{stand}': 还原框 {boxes_before} 个, NMS后 {len(final_boxes)} 个")
+
+            orig_img_path = None
+            for ext in ['.jpg', '.jpeg', '.png', '.bmp']:
+                p = os.path.join(original_folder, f"{stand}{ext}")
+                if os.path.exists(p):
+                    orig_img_path = p
+                    break
+            if orig_img_path is None:
+                print(f"      ⚠️ 警告：找不到原始大图 {stand}，跳过绘图，但结果仍计入CSV")
+            else:
+                try:
+                    with open(orig_img_path, 'rb') as f:
+                        img_bytes = f.read()
+                    img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    if img is None:
+                        print(f"      ❌ 无法解码图片: {orig_img_path}")
+                    else:
+                        for (x1, y1, x2, y2), conf in zip(final_boxes, final_scores):
+                            cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+                            cv2.putText(img, f"{conf:.2f}", (int(x1), int(y1) - 5),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                        cv2.putText(img, f"Total: {len(final_boxes)}", (50, 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 3)
+
+                        out_img_path = os.path.join(output_folder, f"{stand}_detected.jpg")
+                        _, buf = cv2.imencode('.jpg', img)
+                        with open(out_img_path, 'wb') as f_out:
+                            f_out.write(buf)
+                        print(f"      ✅ 已保存带框大图: {out_img_path}")
+                except Exception as e:
+                    print(f"      ❌ 处理原始大图时出错: {e}")
+
+            for (x1, y1, x2, y2), conf in zip(final_boxes, final_scores):
+                summary.append({
+                    'stand': stand,
+                    'x1': int(x1), 'y1': int(y1), 'x2': int(x2), 'y2': int(y2),
+                    'conf': float(conf)
+                })
+
+        summary_df = pd.DataFrame(summary)
+        csv_path = os.path.join(output_folder, "detection_summary.csv")
+        summary_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+        print(f"✅ 汇总 CSV 已保存: {csv_path}")
+        print(f"📈 最终统计：处理看台数 {len(summary_df['stand'].unique())}，总检测人数 {len(summary_df)}")
+
+        return jsonify({
+            "ok": True,
+            "output_folder": output_folder,
+            "total_stands": len(summary_df['stand'].unique()),
+            "total_persons": len(summary_df)
+        })
+    except Exception as e:
+        print(f"❌ 重建过程出错: {str(e)}")
+        return jsonify({"ok": False, "msg": f"重建过程出错: {str(e)}"})
+
+
+# ==================== 文件夹列表 API ====================
+@app.route('/api/list_folders', methods=['POST'])
+def list_folders():
+    data = request.get_json()
+    base_path = data.get('path', '').strip()
+    if not os.path.isdir(base_path):
+        base_path = 'D:\\'
+    try:
+        items = []
+        for item in os.listdir(base_path):
+            full = os.path.join(base_path, item)
+            if os.path.isdir(full):
+                items.append({'name': item, 'path': full})
+        return jsonify({'ok': True, 'items': items, 'parent': os.path.dirname(base_path)})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': str(e)})
+
+
+# ==================== 下载结果打包 ====================
+@app.route('/api/download_result', methods=['POST'])
+def download_result():
+    data = request.get_json()
+    output_folder = data.get('output_folder', '')
+    if not output_folder or not os.path.isdir(output_folder):
+        return jsonify({"ok": False, "msg": "输出目录不存在"})
+
+    zip_path = output_folder + '.zip'
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(output_folder):
+            for file in files:
+                full_path = os.path.join(root, file)
+                arcname = os.path.relpath(full_path, os.path.dirname(output_folder))
+                zf.write(full_path, arcname)
+
+    return send_file(zip_path, as_attachment=True, download_name=os.path.basename(zip_path))
+
+
+# ==================== 工作流页面路由 ====================
+@app.route('/crop')
+def crop_page():
+    return send_from_directory('static', 'crop.html')
+
+
+@app.route('/detect')
+def detect_page():
+    return send_from_directory('static', 'detect.html')
+
+
+@app.route('/rebuild')
+def rebuild_page():
+    return send_from_directory('static', 'rebuild.html')
 
 
 def open_browser():
     time.sleep(1.5)
-    webbrowser.open(f"http://127.0.0.1:{PORT}/")
+    webbrowser.open(f"http://localhost:{PORT}/login")
 
 
 if __name__ == '__main__':
@@ -675,16 +986,8 @@ if __name__ == '__main__':
     print(f"  模型目录：{MODEL_ROOT_DIR}")
     print(f"  保存目录：{SAVE_ROOT_DIR}")
     print(f"  当前模型：{current_model_name}")
-    print(f"  主页: http://127.0.0.1:{PORT}/")
-    print(f"  网页 A（滑窗）: http://127.0.0.1:{PORT}/a")
-    print(f"  网页 B（拼接）: http://127.0.0.1:{PORT}/b")
-    print("  (默认端口 5050，避免与占用 5000 的其它服务冲突；可设 APP_WIN_PORT)")
+    print(f"  动态模型：{is_dynamic_model}")
     print("=" * 60)
-
-    if model_session is None:
-        print("⚠️  警告: 未加载任何模型")
-        print("   请将ONNX模型文件放入以下目录:")
-        print(f"   {MODEL_ROOT_DIR}")
 
     threading.Timer(1.2, open_browser).start()
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)

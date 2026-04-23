@@ -1,0 +1,198 @@
+<!-- static/rebuild.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>步骤3：结果重建与导出</title>
+    <link rel="stylesheet" href="/static/css/workflow.css">
+    <style>
+        .workflow-container {
+            max-width: 800px;
+            margin: 30px auto;
+            background: white;
+            border-radius: 24px;
+            padding: 24px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        .workflow-header {
+            margin-bottom: 24px;
+        }
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #6c757d;
+        }
+        .step.active {
+            color: #2d6a4f;
+            font-weight: bold;
+        }
+        .step.completed {
+            color: #2d6a4f;
+        }
+        .step-number {
+            width: 28px;
+            height: 28px;
+            background: #dee2e6;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        .step.active .step-number {
+            background: #2d6a4f;
+            color: white;
+        }
+        .step.completed .step-number {
+            background: #2d6a4f;
+            color: white;
+        }
+        .arrow {
+            font-size: 18px;
+            color: #adb5bd;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .input-with-button {
+            display: flex;
+            gap: 8px;
+        }
+        .input-with-button input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            background: #f8f9fa;
+        }
+        .slider-container {
+            margin-top: 8px;
+        }
+        .progress-area {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 8px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+        }
+        .log-info { color: #b9f6ca; }
+        .log-success { color: #69f0ae; }
+        .log-error { color: #ff8a80; }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        button.primary {
+            background: #2d6a4f;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 30px;
+            cursor: pointer;
+        }
+        button.primary:disabled {
+            background: #9cb8aa;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: #e9ecef;
+            color: #333;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 30px;
+            cursor: pointer;
+        }
+        button.secondary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .note {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="workflow-container">
+        <div class="workflow-header">
+            <h1>🗺️ 体育场人群检测 · 重建</h1>
+            <div class="step-indicator">
+                <div class="step completed"><span class="step-number">1</span> 裁剪筛选</div>
+                <span class="arrow">→</span>
+                <div class="step completed"><span class="step-number">2</span> 检测</div>
+                <span class="arrow">→</span>
+                <div class="step active"><span class="step-number">3</span> 重建</div>
+            </div>
+        </div>
+
+        <!-- 检测结果文件夹（自动带入，只读） -->
+        <div class="form-group">
+            <label>📁 检测结果文件夹</label>
+            <input type="text" id="detectFolder" readonly placeholder="自动从检测步骤带入">
+        </div>
+
+        <!-- 裁剪映射文件（自动带入，只读） -->
+        <div class="form-group">
+            <label>📄 裁剪映射文件 (Excel)</label>
+            <input type="text" id="mappingFile" readonly placeholder="自动从裁剪步骤带入">
+        </div>
+
+        <!-- 原始大图文件夹（自动带入，只读） -->
+        <div class="form-group">
+            <label>🖼️ 原始大图文件夹</label>
+            <input type="text" id="originalFolder" readonly placeholder="自动从裁剪步骤带入">
+            <div class="note">* 原始大图已上传到服务器临时目录</div>
+        </div>
+
+        <!-- 输出目录（自动生成，只读显示） -->
+        <div class="form-group">
+            <label>💾 输出目录（自动生成）</label>
+            <input type="text" id="outputFolderDisplay" readonly placeholder="系统自动生成">
+        </div>
+
+        <!-- NMS 阈值滑块 -->
+        <div class="form-group">
+            <label>🎚️ NMS 重叠阈值: <span id="nmsValue">0.75</span></label>
+            <div class="slider-container">
+                <input type="range" id="nmsSlider" min="0" max="1" step="0.01" value="0.40">
+            </div>
+            <div class="note">推荐值 0.35-0.4，值越小去重越强</div>
+        </div>
+
+        <div class="progress-area" id="logBox">
+            <div class="log-entry log-info">✨ 准备就绪，点击开始重建...</div>
+        </div>
+
+        <div class="button-group">
+            <button class="secondary" id="backBtn">← 上一步：返回检测</button>
+            <button class="primary" id="startRebuildBtn">🚀 开始重建</button>
+            <button class="secondary" id="downloadResultBtn" disabled>📥 下载结果</button>
+        </div>
+    </div>
+
+    <script src="/static/js/rebuild.js"></script>
+</body>
+</html>
