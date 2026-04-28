@@ -99,10 +99,17 @@
         .log-info { color: #b9f6ca; }
         .log-success { color: #69f0ae; }
         .log-error { color: #ff8a80; }
+        /* 按钮组布局调整：左侧放返回首页，右侧放其他操作 */
         .button-group {
             display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
             gap: 12px;
-            justify-content: flex-end;
+        }
+        .button-group .right-btns {
+            display: flex;
+            gap: 12px;
         }
         button.primary {
             background: #2d6a4f;
@@ -179,17 +186,21 @@
             <div class="slider-container">
                 <input type="range" id="nmsSlider" min="0" max="1" step="0.01" value="0.40">
             </div>
-            <div class="note">推荐值 0.35-0.4，值越小去重越强</div>
+            <div class="note">推荐值 0.98，值越小去重越强</div>
         </div>
 
         <div class="progress-area" id="logBox">
             <div class="log-entry log-info">✨ 准备就绪，点击开始重建...</div>
         </div>
 
+        <!-- 按钮组：左侧返回首页，右侧其他操作 -->
         <div class="button-group">
-            <button class="secondary" id="backBtn">← 上一步：返回检测</button>
-            <button class="primary" id="startRebuildBtn">🚀 开始重建</button>
-            <button class="secondary" id="downloadResultBtn" disabled>📥 下载结果</button>
+            <button class="secondary" id="homeBtn">🏠 返回首页</button>
+            <div class="right-btns">
+                <button class="secondary" id="backBtn">← 上一步：返回检测</button>
+                <button class="primary" id="startRebuildBtn">🚀 开始重建</button>
+                <button class="secondary" id="downloadResultBtn" disabled>📥 下载结果</button>
+            </div>
         </div>
     </div>
 

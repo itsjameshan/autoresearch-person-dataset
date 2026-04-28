@@ -9,6 +9,7 @@
     const startBtn = document.getElementById('startRebuildBtn');
     const downloadBtn = document.getElementById('downloadResultBtn');
     const backBtn = document.getElementById('backBtn');
+    const homeBtn = document.getElementById('homeBtn');
     const logBox = document.getElementById('logBox');
 
     let outputFolder = null;
@@ -44,7 +45,6 @@
         outputFolder = workRoot + '\\重建结果';
         outputFolderDisplay.value = outputFolder;
     } else if (detectFolder) {
-        // 兼容旧逻辑（无 workRoot 时回退到上一级目录加“重建结果”）
         let parent = detectFolder.replace(/\\+$/, '');
         let lastSlash = parent.lastIndexOf('\\');
         if (lastSlash !== -1) {
@@ -146,5 +146,10 @@
     // 返回检测页面
     backBtn.addEventListener('click', () => {
         window.location.href = '/detect';
+    });
+
+    // 返回首页
+    homeBtn.addEventListener('click', () => {
+        window.location.href = '/';
     });
 })();

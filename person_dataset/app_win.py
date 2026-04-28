@@ -24,7 +24,7 @@ warnings.filterwarnings('ignore')
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 CORS(app)
 app.config['SECRET_KEY'] = 'person_detect'  # 生产环境请改为随机字符串
-app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 256 * 1024 * 1024
 
 # ==================== 用户数据文件 ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,8 +73,8 @@ FIXED_IMG_SIZE = 1280
 STRIDE = 32
 PORT = 5000
 
-MIN_BOX_W = 15
-MIN_BOX_H = 30
+MIN_BOX_W = 12
+MIN_BOX_H = 18
 GLOBAL_NMS_IOU = 0.75
 
 model_lock = threading.Lock()
@@ -84,7 +84,7 @@ model_lock = threading.Lock()
 @app.before_request
 def check_login():
     # 允许访问的路径白名单
-    public_paths = ['/login', '/static', '/api/login', '/api/logout', '/api/register', '/api/check_login', '/health']
+    public_paths = ['/login', '/static', '/api/login', '/api/logout', '/api/register', '/api/check_login', '/health', '/history', '/api/history', '/personal', '/api/user']
     path = request.path
     if any(path.startswith(p) for p in public_paths):
         return None
@@ -418,8 +418,8 @@ def detect_folder():
         data = request.get_json()
         folder = data.get('folder_path', '').strip()
         # 固定置信度和 IoU 为 0.3，忽略前端传递的值
-        conf = 0.08
-        iou = 0.75
+        conf = 0.15
+        iou = 0.8
 
         if not os.path.isdir(folder):
             return jsonify({"error": "文件夹不存在", "results": []})
@@ -807,8 +807,7 @@ def api_rebuild():
             x_off = row['x_offset']
             y_off = row['y_offset']
 
-            # 1. 先尝试标准目录结构：detect_folder/stand/tile_name.json
-            json_path = os.path.join(detect_folder, stand, tile_name.replace('.jpg', '.json'))
+            json_path = os.path.join(detect_folder, str(stand), tile_name.replace('.jpg', '.json'))
 
             # 2. 若不存在，尝试平铺模式：detect_folder/tile_name.json（去掉子文件夹）
             if not os.path.exists(json_path):
@@ -958,6 +957,120 @@ def download_result():
 
     return send_file(zip_path, as_attachment=True, download_name=os.path.basename(zip_path))
 
+
+# ==================== 历史数据相关 API ====================
+HISTORY_ROOT = r"D:\pythonProject\person_dataset\rentoujieguo"
+
+@app.route('/api/history/list')
+def history_list():
+    """获取历史检测项目列表"""
+    if not os.path.isdir(HISTORY_ROOT):
+        return jsonify({"projects": []})
+
+    projects = []
+    for item in os.listdir(HISTORY_ROOT):
+        item_path = os.path.join(HISTORY_ROOT, item)
+        if not os.path.isdir(item_path) or not item.startswith("项目_"):
+            continue
+
+        # 读取重建结果中的汇总信息
+        rebuild_dir = os.path.join(item_path, "重建结果")
+        csv_path = os.path.join(rebuild_dir, "detection_summary.csv")
+        person_count = 0
+        stand_count = 0
+        create_time = ""
+        try:
+            if os.path.exists(csv_path):
+                df = pd.read_csv(csv_path)
+                person_count = len(df)
+                stand_count = df['stand'].nunique() if 'stand' in df.columns else 0
+            # 尝试从文件夹名称解析时间
+            ts_str = item.replace("项目_", "").replace("项目_检测_", "")
+            create_time = ts_str[:4] + "-" + ts_str[4:6] + "-" + ts_str[6:8] + " " + ts_str[9:11] + ":" + ts_str[
+                11:13] + ":" + ts_str[13:15] if len(ts_str) >= 15 else ""
+        except:
+            pass
+
+        projects.append({
+            "name": item,
+            "path": item_path,
+            "create_time": create_time,
+            "person_count": person_count,
+            "stand_count": stand_count
+        })
+
+    # 按名称倒序（时间戳大的在前）
+    projects.sort(key=lambda x: x['name'], reverse=True)
+    return jsonify({"projects": projects})
+
+
+@app.route('/api/history/download', methods=['POST'])
+def history_download():
+    """下载指定项目的重建结果"""
+    data = request.get_json()
+    project_name = data.get('project', '').strip()
+    if not project_name:
+        return jsonify({"ok": False, "msg": "缺少项目名称"})
+
+    rebuild_dir = os.path.join(HISTORY_ROOT, project_name, "重建结果")
+    if not os.path.isdir(rebuild_dir):
+        return jsonify({"ok": False, "msg": "该项目没有重建结果"})
+
+    # 打包重建结果目录
+    zip_path = os.path.join(HISTORY_ROOT, f"{project_name}_结果.zip")
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(rebuild_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    arcname = os.path.relpath(full_path, os.path.dirname(rebuild_dir))
+                    zf.write(full_path, arcname)
+        return send_file(zip_path, as_attachment=True, download_name=f"{project_name}_结果.zip")
+    except Exception as e:
+        return jsonify({"ok": False, "msg": f"打包失败: {str(e)}"})
+
+
+# ==================== 个人中心相关 API ====================
+
+@app.route('/api/user/profile')
+def user_profile():
+    """获取当前登录用户的个人信息"""
+    if 'user' not in session:
+        return jsonify({"ok": False, "msg": "未登录"}), 401
+    username = session['user']
+    # 简单判断身份：admin 为管理员，其他为普通用户
+    role = "管理员" if username == "admin" else "普通用户"
+    # 昵称默认取用户名，也可从配置文件读取（这里演示先直接用用户名）
+    display_name = username
+    return jsonify({
+        "ok": True,
+        "username": username,
+        "display_name": display_name,
+        "role": role
+    })
+
+
+@app.route('/api/user/change_password', methods=['POST'])
+def change_password():
+    """修改当前登录用户的密码"""
+    if 'user' not in session:
+        return jsonify({"ok": False, "msg": "未登录"}), 401
+    data = request.get_json()
+    old_password = data.get('old_password', '')
+    new_password = data.get('new_password', '')
+    if not old_password or not new_password:
+        return jsonify({"ok": False, "msg": "请输入旧密码和新密码"})
+    if len(new_password) < 6:
+        return jsonify({"ok": False, "msg": "新密码至少6位"})
+
+    username = session['user']
+    users = load_users()
+    if users.get(username) != old_password:
+        return jsonify({"ok": False, "msg": "旧密码错误"})
+
+    users[username] = new_password
+    save_users(users)
+    return jsonify({"ok": True, "msg": "密码修改成功，请重新登录"})
 
 # ==================== 工作流页面路由 ====================
 @app.route('/crop')

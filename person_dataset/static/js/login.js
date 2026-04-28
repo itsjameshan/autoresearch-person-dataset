@@ -114,7 +114,6 @@
             const data = await response.json();
             if (response.ok && data.ok) {
                 alert('注册成功！请登录');
-                // 切换到登录页，并预填用户名
                 switchTab(true);
                 loginUsername.value = username;
                 loginPassword.value = '';
@@ -143,5 +142,17 @@
             // 忽略错误
         }
     }
+    // 如需防止已登录用户重复登录，可取消下面一行注释
     //checkAlreadyLogin();
+
+    // ===== 修复浏览器后退按钮导致登录按钮无法点击的问题 =====
+    window.addEventListener('pageshow', (event) => {
+        // 如果页面是从浏览器缓存（bfcache）恢复的
+        if (event.persisted) {
+            // 重置所有提交按钮为可用状态
+            document.querySelectorAll('.auth-btn').forEach(btn => {
+                btn.disabled = false;
+            });
+        }
+    });
 })();

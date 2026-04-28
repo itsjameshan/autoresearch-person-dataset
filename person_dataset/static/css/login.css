@@ -1,51 +1,242 @@
-/* 基本样式保持一致，增加以下内容 */
+/* static/css/login.css */
+
+/* ========== 全局背景与布局 ========== */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden; /* 防止视频溢出 */
+    /* 备用渐变背景 */
+    background: linear-gradient(135deg, #e0f0ff 0%, #c8e6ff 40%, #f0f8ff 100%);
+}
+
+/* ========== 背景视频 ========== */
+#bgVideo {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    transform: translate(-50%, -50%);
+    z-index: -1;
+    object-fit: cover; /* 填满整个屏幕，不改变比例 */
+}
+
+.login-bg {
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    /* 半透明遮罩，确保卡片可读性 */
+    background: rgba(255, 255, 255, 0.3);
+    backdrop-filter: blur(5px);
+}
+
+/* ========== 卡片容器 ========== */
+.login-container {
+    width: 100%;
+    max-width: 440px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(16px);
+    border-radius: 28px;
+    box-shadow: 0 20px 50px rgba(0, 100, 200, 0.15), 0 5px 20px rgba(0, 0, 0, 0.05);
+    padding: 40px 35px;
+    animation: slideUp 0.6s ease-out;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    z-index: 1; /* 确保卡片在视频之上 */
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ========== 头部标题 ========== */
+.login-header {
+    text-align: center;
+    margin-bottom: 32px;
+}
+
+.login-header h1 {
+    font-size: 32px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #1e6ec7, #3b8ed4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+}
+
+.login-header p {
+    color: #5a7c9e;
+    font-size: 14px;
+    letter-spacing: 1px;
+    font-weight: 400;
+}
+
+/* ========== 选项卡栏 ========== */
 .tab-bar {
     display: flex;
-    margin-bottom: 20px;
-    border-bottom: 2px solid #e0e0e0;
+    margin-bottom: 28px;
+    background: #eef5fb;
+    border-radius: 40px;
+    padding: 4px;
+    border: 1px solid #cddfee;
 }
+
 .tab-btn {
     flex: 1;
-    padding: 12px;
-    background: none;
+    padding: 12px 20px;
+    background: transparent;
     border: none;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
-    color: #6c757d;
+    color: #7a8fa6;
     cursor: pointer;
-    transition: all 0.2s;
-    border-bottom: 3px solid transparent;
+    border-radius: 36px;
+    transition: all 0.3s ease;
+    position: relative;
+    z-index: 1;
 }
+
 .tab-btn.active {
-    color: #2d6a4f;
-    border-bottom-color: #2d6a4f;
+    background: #ffffff;
+    color: #1e6ec7;
+    box-shadow: 0 4px 12px rgba(30, 110, 200, 0.12);
+    border: 1px solid rgba(30, 110, 200, 0.2);
 }
+
+.tab-btn:hover:not(.active) {
+    color: #2b7cd3;
+    background: rgba(255,255,255,0.7);
+}
+
+/* ========== 表单样式 ========== */
 .auth-form {
     display: none;
+    animation: fadeIn 0.3s ease;
 }
+
 .auth-form.active {
     display: block;
 }
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.form-group {
+    margin-bottom: 22px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #1e3c5c;
+    font-size: 14px;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 14px 18px;
+    background: #f7faff;
+    border: 1.5px solid #d8e6f3;
+    border-radius: 16px;
+    font-size: 15px;
+    transition: all 0.3s ease;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+    outline: none;
+    color: #1e3c5c;
+}
+
+.form-group input::placeholder {
+    color: #a0b6cc;
+}
+
+.form-group input:focus {
+    border-color: #3b8ed4;
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(59, 142, 212, 0.08);
+}
+
+/* ========== 错误提示 ========== */
+.error-msg {
+    color: #e74c3c;
+    font-size: 13px;
+    margin: -10px 0 15px 5px;
+    min-height: 20px;
+    font-weight: 500;
+}
+
+/* ========== 提交按钮 ========== */
 .auth-btn {
     width: 100%;
-    padding: 14px;
-    background: linear-gradient(145deg, #2d6a4f, #1f4a38);
+    padding: 15px;
+    background: linear-gradient(145deg, #3b8ed4, #1e6ec7);
     color: white;
     border: none;
     border-radius: 40px;
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
-    transition: all 0.2s;
-    border: 1px solid #5f9b7a;
+    transition: all 0.3s ease;
+    border: 1px solid #5aa3e0;
+    letter-spacing: 1px;
+    box-shadow: 0 8px 20px rgba(30, 110, 200, 0.2);
+    margin-top: 10px;
 }
+
 .auth-btn:hover {
-    background: linear-gradient(145deg, #1f4a38, #143523);
-    box-shadow: 0 6px 14px rgba(29, 78, 50, 0.25);
-    transform: translateY(-1px);
+    background: linear-gradient(145deg, #1e6ec7, #155bb5);
+    box-shadow: 0 6px 18px rgba(30, 110, 200, 0.35);
+    transform: translateY(-2px);
 }
+
+.auth-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 4px 12px rgba(30, 110, 200, 0.2);
+}
+
 .auth-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+    transform: none;
 }
-/* 其余样式复用原有登录框样式 */
+
+/* ========== 底部提示 ========== */
+.footer-note {
+    display: none;
+}
+
+/* ========== 响应式调整 ========== */
+@media (max-width: 500px) {
+    .login-container {
+        padding: 30px 25px;
+    }
+    .login-header h1 {
+        font-size: 26px;
+    }
+}

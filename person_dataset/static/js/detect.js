@@ -100,6 +100,7 @@
             return { renderW, renderH, offsetX, offsetY };
         }
 
+        // ========== 绘制函数（只保留高亮红框，移除重复绿色框） ==========
         function drawAllBoxes(persons, highlightIdx = -1) {
             if (!detectImg.complete || detectImg.naturalWidth === 0) {
                 setTimeout(() => drawAllBoxes(persons, highlightIdx), 50);
@@ -116,23 +117,11 @@
             const rect = getImageRenderRect(detectImg);
             if (!rect) return;
 
-            const scaleX = rect.renderW / detectImg.naturalWidth;
-            const scaleY = rect.renderH / detectImg.naturalHeight;
-
-            // 绘制所有绿色框
-            persons.forEach((p, idx) => {
-                const x1 = rect.offsetX + p.x1 * scaleX;
-                const y1 = rect.offsetY + p.y1 * scaleY;
-                const w = (p.x2 - p.x1) * scaleX;
-                const h = (p.y2 - p.y1) * scaleY;
-
-                ctx.strokeStyle = '#00ff00';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(x1, y1, w, h);
-            });
-
-            // 绘制红色高亮框
+            // 后端返回的图片已经包含绿色检测框，此处不再重复绘制它们
+            // 只绘制用户点击表格行时的高亮红框
             if (highlightIdx >= 0 && highlightIdx < persons.length) {
+                const scaleX = rect.renderW / detectImg.naturalWidth;
+                const scaleY = rect.renderH / detectImg.naturalHeight;
                 const p = persons[highlightIdx];
                 const x1 = rect.offsetX + p.x1 * scaleX;
                 const y1 = rect.offsetY + p.y1 * scaleY;
