@@ -1,9 +1,10 @@
 """
-train.py — Optimized for Dense Crowd Detection (Windows GPU)
-Each experiment: change hyperparams below, then run:
+train.py — Optimized for Windows GPU Training
+Auto-research loop: modify hyperparameters, then run:
   python train.py > run.log 2>&1
 
-HARDWARE: Windows GPU machine with CUDA
+CRITICAL: This file is designed for Windows GPU machines with CUDA.
+For MacBook/MPS, use train_mps.py instead.
 """
 
 import os
@@ -20,11 +21,11 @@ from ultralytics import YOLO
 from evaluate import evaluate_model, print_metrics
 
 # ══════════════════════════════════════════════════════════════
-# EXPERIMENT CONFIG
+# EXPERIMENT CONFIG — Agent modifies this section
 # ══════════════════════════════════════════════════════════════
 
 MODEL = "yolo12m.pt"
-DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
+DATA_YAML = "person_dataset/person.yaml"
 IMGSZ = 1280
 EPOCHS = 100
 
@@ -61,7 +62,7 @@ CONF = 0.001
 IOU = 0.5
 
 PROJECT = "autoresearch_runs"
-NAME = "exp_baseline_v1"
+NAME = "exp_optimized_v1"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def _abs(rel_or_abs: str) -> str:
