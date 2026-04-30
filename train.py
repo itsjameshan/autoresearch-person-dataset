@@ -30,8 +30,7 @@ COS_LR = True
 PATIENCE = 30
 
 LR0 = 0.01
-LRF = 0.01
-
+LRF = 0.005  # Reduced LRF
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
@@ -41,10 +40,10 @@ SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
 MOSAIC = 0.99  # Increased mosaic
-MIXUP = 0.9  # Increased mixup
-COPY_PASTE = 0.2
-ERASING = 0.6
-CLOSE_MOSAIC = 20
+MIXUP = 0.5  # Increased mixup
+COPY_PASTE = 0.15
+ERASING = 0.4
+CLOSE_MOSAIC = 15
 
 BOX = 10.0
 CLS = 0.5
@@ -53,7 +52,7 @@ CONF = 0.001
 IOU = 0.5
 
 PROJECT = "autoresearch_runs"
-NAME = "exp_mosaic_boost_v7"
+NAME = "exp_mosaic_boost_v6"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def _abs(rel_or_abs: str) -> str:
