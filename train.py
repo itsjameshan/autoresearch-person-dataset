@@ -40,7 +40,7 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.7  # Increased mosaic
+MOSAIC = 0.9  # Increased mosaic
 MIXUP = 0.10  # Reduced mixup
 COPY_PASTE = 0.15
 ERASING = 0.4
@@ -53,7 +53,7 @@ CONF = 0.001
 IOU = 0.5
 
 PROJECT = "autoresearch_runs"
-NAME = "exp_baseline_v3"
+NAME = "exp_mosaic_boost_v3"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def _abs(rel_or_abs: str) -> str:
@@ -89,7 +89,6 @@ def train():
         translate=TRANSLATE,
         scale=SCALE,
         flipud=FLIPUD,
-        fliplr=FLIPLR,
         mosaic=MOSAIC,
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
