@@ -30,8 +30,7 @@ COS_LR = True
 PATIENCE = 30
 
 LR0 = 0.01
-LRF = 0.01
-
+LRF = 0.005  # Reduced LRF
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
