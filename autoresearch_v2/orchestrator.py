@@ -121,6 +121,7 @@ class Orchestrator:
         )
         self.eval_dispatcher = EvalDispatcher(
             state=self.state,
+            events_logger=self.events,
             data_yaml=config.get("data_yaml", DEFAULT_DATA_YAML),
             imgsz=config.get("imgsz", 1280),
         )

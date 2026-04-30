@@ -56,9 +56,19 @@ def _encode_image_base64(image_path: str) -> str:
 
 def _collect_fp_fn_images(fp_fn_dir: str = FP_FN_DIR,
                           max_images: int = 20) -> list[dict]:
+    """Walk fp_fn_dir (and one level of subdirs for per-run layouts) for
+    fp_*.jpg / fn_*.jpg crops."""
     images = []
-    fp_files = sorted(glob.glob(os.path.join(fp_fn_dir, "fp_*.jpg")))
-    fn_files = sorted(glob.glob(os.path.join(fp_fn_dir, "fn_*.jpg")))
+    # Direct children + one-level subdir (per-run subdirs from
+    # extract_fp_fn_crops keep_history=True).
+    patterns = [fp_fn_dir, os.path.join(fp_fn_dir, "*")]
+    fp_files = []
+    fn_files = []
+    for base in patterns:
+        fp_files.extend(glob.glob(os.path.join(base, "fp_*.jpg")))
+        fn_files.extend(glob.glob(os.path.join(base, "fn_*.jpg")))
+    fp_files = sorted(set(fp_files))
+    fn_files = sorted(set(fn_files))
 
     for f in fp_files[:max_images // 2]:
         images.append({"path": f, "type": "FP", "name": os.path.basename(f)})
@@ -76,16 +86,21 @@ def _build_context(fp_fn_data: dict, dataset_stats: dict = None) -> str:
     lines.append(f"## FP/FN 概览")
     lines.append(f"- False Positives: {fp_count}")
     lines.append(f"- False Negatives: {fn_count}")
+    if fp_fn_data.get("output_dir"):
+        lines.append(f"- crops dir: {fp_fn_data['output_dir']}")
 
     if fp_fn_data.get("fp_images"):
-        lines.append("\n### FP 详情 (top-10)")
+        lines.append("\n### FP 详情 (top-10, 按 pred_conf 降序)")
         for rec in fp_fn_data["fp_images"][:10]:
+            conf = rec.get("pred_conf")
+            conf_s = f"conf={conf:.3f}" if isinstance(conf, (int, float)) else "conf=?"
             lines.append(f"- {rec.get('image', '?')}: "
+                          f"{conf_s} "
                           f"pred_count={rec.get('pred_count', '?')} "
                           f"gt_count={rec.get('gt_count', '?')}")
 
     if fp_fn_data.get("fn_images"):
-        lines.append("\n### FN 详情 (top-10)")
+        lines.append("\n### FN 详情 (top-10, 按 gt_area 升序 = 小目标优先)")
         for rec in fp_fn_data["fn_images"][:10]:
             lines.append(f"- {rec.get('image', '?')}: "
                           f"gt_area={rec.get('gt_area', 0):.6f} "
@@ -275,7 +290,12 @@ class CuratorAgent:
     def analyze(self, fp_fn_data: dict, run_id: str = "",
                 dataset_stats: dict = None) -> dict:
         context = _build_context(fp_fn_data, dataset_stats)
-        images = _collect_fp_fn_images(max_images=self.max_images_per_call)
+        # Prefer the dispatcher-reported per-run dir (keep_history layout);
+        # fall back to the legacy single-flat dir for backward compat.
+        crops_dir = fp_fn_data.get("output_dir") or FP_FN_DIR
+        images = _collect_fp_fn_images(
+            fp_fn_dir=crops_dir, max_images=self.max_images_per_call,
+        )
 
         self._emit(
             "curator_start",
