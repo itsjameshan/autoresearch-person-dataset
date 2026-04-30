@@ -63,6 +63,10 @@ echo decision in real time. To watch separately in PowerShell:
 echo   Get-Content run.log -Wait -Tail 30
 echo   Get-Content activity_events.jsonl -Wait -Tail 30
 echo.
+echo Companion tools (run in their own terminals):
+echo   start_dashboard.bat         http://127.0.0.1:5052/   (read-only overview)
+echo   python -m autoresearch_v2.hitl_app   http://127.0.0.1:5051/  (approve/deny)
+echo.
 echo Press Ctrl+C to stop.
 echo ========================================
 echo.
