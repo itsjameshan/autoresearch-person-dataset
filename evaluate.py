@@ -185,13 +185,226 @@ def match_predictions_to_gt(pred_boxes, gt_boxes, iou_thresh=0.5):
     return len(matched_gt)
 
 
-def evaluate_model(model_path, data_yaml, imgsz=1280):
+def _match_with_indices(pred_boxes, pred_scores, gt_boxes, iou_thresh=0.5):
+    """Greedy IoU matching that returns full index breakdown for FP/FN analysis.
+
+    Predictions are visited in descending confidence order so highest-confidence
+    detections claim GT boxes first.
+
+    Returns
+    -------
+    matches : list of dict {"pred": int, "gt": int, "iou": float}
+    fp_indices : list of int
+        Indices into pred_boxes that did not match any GT.
+    fn_indices : list of int
+        Indices into gt_boxes that no prediction matched.
+    """
+    n_pred = len(pred_boxes)
+    n_gt = len(gt_boxes)
+    if n_pred == 0:
+        return [], [], list(range(n_gt))
+    if n_gt == 0:
+        return [], list(range(n_pred)), []
+
+    if pred_scores and len(pred_scores) == n_pred:
+        order = sorted(range(n_pred), key=lambda i: pred_scores[i], reverse=True)
+    else:
+        order = list(range(n_pred))
+
+    matched_gt = {}
+    matches = []
+    for pi in order:
+        best_iou = 0.0
+        best_gt = -1
+        for gi in range(n_gt):
+            if gi in matched_gt:
+                continue
+            iou = compute_iou(pred_boxes[pi], gt_boxes[gi])
+            if iou > best_iou:
+                best_iou = iou
+                best_gt = gi
+        if best_iou >= iou_thresh and best_gt >= 0:
+            matched_gt[best_gt] = pi
+            matches.append({"pred": pi, "gt": best_gt, "iou": float(best_iou)})
+
+    matched_preds = {m["pred"] for m in matches}
+    fp_indices = [i for i in range(n_pred) if i not in matched_preds]
+    fn_indices = [i for i in range(n_gt) if i not in matched_gt]
+    return matches, fp_indices, fn_indices
+
+
+def _padded_crop_box(box, img_w, img_h, pad_frac=0.2):
+    """Inflate a [x1,y1,x2,y2] box by pad_frac on each side, clamped to image."""
+    x1, y1, x2, y2 = box
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+    px = w * pad_frac
+    py = h * pad_frac
+    cx1 = max(0, int(round(x1 - px)))
+    cy1 = max(0, int(round(y1 - py)))
+    cx2 = min(img_w, int(round(x2 + px)))
+    cy2 = min(img_h, int(round(y2 + py)))
+    if cx2 <= cx1 or cy2 <= cy1:
+        return None
+    return cx1, cy1, cx2, cy2
+
+
+def _export_fpfn_for_image(
+    img_path,
+    img_stem,
+    gt_boxes,
+    pred_boxes,
+    pred_scores,
+    matches,
+    fp_indices,
+    fn_indices,
+    out_dir,
+    img_w,
+    img_h,
+    iou_thresh,
+    top_k,
+):
+    """Write per-image FP/FN JSON + top-K crops. Returns summary dict for index."""
+    from PIL import Image
+
+    crops_dir = out_dir / "crops"
+    per_image_dir = out_dir / "per_image"
+    crops_dir.mkdir(parents=True, exist_ok=True)
+    per_image_dir.mkdir(parents=True, exist_ok=True)
+
+    # Rank FPs by confidence (highest first); FNs by area (largest first — most visually obvious failures)
+    if pred_scores and len(pred_scores) == len(pred_boxes):
+        fp_ranked = sorted(fp_indices, key=lambda i: pred_scores[i], reverse=True)
+    else:
+        fp_ranked = list(fp_indices)
+
+    def _gt_area(gi):
+        gb = gt_boxes[gi]
+        return max(0.0, (gb[2] - gb[0]) * (gb[3] - gb[1]))
+    fn_ranked = sorted(fn_indices, key=_gt_area, reverse=True)
+
+    fp_top = fp_ranked[:top_k]
+    fn_top = fn_ranked[:top_k]
+
+    exported_fp = []
+    exported_fn = []
+    img = None
+    if fp_top or fn_top:
+        try:
+            img = Image.open(img_path).convert("RGB")
+        except Exception as e:
+            print(f"evaluate: failed to open {img_path} for cropping: {e}", file=sys.stderr)
+            img = None
+
+    if img is not None:
+        for rank, pi in enumerate(fp_top):
+            crop_box = _padded_crop_box(pred_boxes[pi], img_w, img_h)
+            if crop_box is None:
+                continue
+            crop = img.crop(crop_box)
+            fname = f"{img_stem}_fp_{rank:02d}_idx{pi}.jpg"
+            try:
+                crop.save(crops_dir / fname, format="JPEG", quality=85)
+                exported_fp.append(f"crops/{fname}")
+            except OSError as e:
+                print(f"evaluate: failed to save crop {fname}: {e}", file=sys.stderr)
+
+        for rank, gi in enumerate(fn_top):
+            crop_box = _padded_crop_box(gt_boxes[gi], img_w, img_h)
+            if crop_box is None:
+                continue
+            crop = img.crop(crop_box)
+            fname = f"{img_stem}_fn_{rank:02d}_idx{gi}.jpg"
+            try:
+                crop.save(crops_dir / fname, format="JPEG", quality=85)
+                exported_fn.append(f"crops/{fname}")
+            except OSError as e:
+                print(f"evaluate: failed to save crop {fname}: {e}", file=sys.stderr)
+
+    per_image = {
+        "image_path": str(img_path),
+        "image_size": [img_w, img_h],
+        "iou_threshold": iou_thresh,
+        "gt_boxes": [[round(v, 2) for v in b] for b in gt_boxes],
+        "pred_boxes": [[round(v, 2) for v in b] for b in pred_boxes],
+        "pred_scores": [round(float(s), 4) for s in pred_scores] if pred_scores else [],
+        "matches": matches,
+        "fp_indices": fp_indices,
+        "fn_indices": fn_indices,
+        "fp_top_indices": fp_top,
+        "fn_top_indices": fn_top,
+        "exported_fp_crops": exported_fp,
+        "exported_fn_crops": exported_fn,
+    }
+    try:
+        with open(per_image_dir / f"{img_stem}.json", "w", encoding="utf-8") as f:
+            json.dump(per_image, f, indent=2)
+    except OSError as e:
+        print(f"evaluate: failed to write per-image json for {img_stem}: {e}", file=sys.stderr)
+
+    return {
+        "image_path": str(img_path),
+        "gt_count": len(gt_boxes),
+        "pred_count": len(pred_boxes),
+        "matched_count": len(matches),
+        "fp_count": len(fp_indices),
+        "fn_count": len(fn_indices),
+        "fp_top_indices": fp_top,
+        "fn_top_indices": fn_top,
+        "exported_fp_crops": len(exported_fp),
+        "exported_fn_crops": len(exported_fn),
+        "per_image_json": f"per_image/{img_stem}.json",
+    }
+
+
+def _resolve_fpfn_dir(cli_value):
+    """Resolve FP/FN export directory from CLI arg or env var."""
+    if cli_value:
+        return Path(cli_value)
+    raw = os.environ.get("AUTORESEARCH_FPFN_DIR", "").strip()
+    if raw:
+        return Path(raw)
+    return None
+
+
+def _resolve_fpfn_topk(cli_value, default=10):
+    if cli_value is not None:
+        return max(0, int(cli_value))
+    raw = os.environ.get("AUTORESEARCH_FPFN_TOPK", "").strip()
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            print("evaluate: invalid AUTORESEARCH_FPFN_TOPK, using default", file=sys.stderr)
+    return default
+
+
+def evaluate_model(
+    model_path,
+    data_yaml,
+    imgsz=1280,
+    fpfn_dir=None,
+    fpfn_topk=10,
+    fpfn_iou=0.5,
+):
     """Main evaluation function. Returns dict of all metrics.
 
     This is the single source of truth for the autoresearch loop.
+
+    fpfn_dir : Path | None
+        If set, write per-image FP/FN JSON and top-K failure crops here. Used by
+        the v2 Data Curator agent for visual failure analysis. Default behavior
+        (None) is unchanged from the legacy contract.
     """
     # ── Watchdog: hard-kill if anything below hangs ──
     _watchdog = _start_eval_watchdog()
+
+    fpfn_enabled = fpfn_dir is not None
+    fpfn_index = {}
+    if fpfn_enabled:
+        fpfn_dir = Path(fpfn_dir)
+        fpfn_dir.mkdir(parents=True, exist_ok=True)
+        print(f"evaluate: FP/FN export enabled -> {fpfn_dir} (top_k={fpfn_topk}, iou={fpfn_iou})")
 
     # ── Load model ──
     model = YOLO(model_path)
@@ -264,9 +477,11 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
 
         if res.boxes is not None and len(res.boxes) > 0:
             pred_boxes = res.boxes.xyxy.cpu().numpy().tolist()
+            pred_scores = res.boxes.conf.cpu().numpy().tolist()
             pred_count = len(pred_boxes)
         else:
             pred_boxes = []
+            pred_scores = []
             pred_count = 0
 
         # Counting accuracy per image
@@ -287,6 +502,28 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
                     best_iou = max(best_iou, iou)
                 if best_iou >= 0.5:
                     small_gt_matched += 1
+
+        # Per-image FP/FN export (only when explicitly enabled)
+        if fpfn_enabled:
+            matches, fp_idx, fn_idx = _match_with_indices(
+                pred_boxes, pred_scores, gt_boxes, iou_thresh=fpfn_iou,
+            )
+            entry = _export_fpfn_for_image(
+                img_path=img_path,
+                img_stem=img_name,
+                gt_boxes=gt_boxes,
+                pred_boxes=pred_boxes,
+                pred_scores=pred_scores,
+                matches=matches,
+                fp_indices=fp_idx,
+                fn_indices=fn_idx,
+                out_dir=fpfn_dir,
+                img_w=imgsz,
+                img_h=imgsz,
+                iou_thresh=fpfn_iou,
+                top_k=fpfn_topk,
+            )
+            fpfn_index[img_name] = entry
 
         if (i + 1) % 100 == 0:
             print(f"  processed {i + 1}/{len(val_images)} images...")
@@ -390,6 +627,39 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
             json.dump(metrics, f, indent=2)
     except OSError as e:
         print(f"evaluate: failed to write {METRICS_JSON_PATH}: {e}", file=sys.stderr)
+
+    # ── FP/FN index (only when --export-fpfn was used) ──
+    if fpfn_enabled:
+        total_fp = sum(e["fp_count"] for e in fpfn_index.values())
+        total_fn = sum(e["fn_count"] for e in fpfn_index.values())
+        index_payload = {
+            "version": 1,
+            "model_path": str(model_path),
+            "data_yaml": str(data_yaml),
+            "imgsz": imgsz,
+            "iou_threshold": fpfn_iou,
+            "topk_per_image": fpfn_topk,
+            "deploy_conf": DEPLOY_CONF,
+            "deploy_iou_nms": DEPLOY_IOU_NMS,
+            "total_images": len(fpfn_index),
+            "total_fp": total_fp,
+            "total_fn": total_fn,
+            "metrics_summary": {
+                "cds": metrics["cds"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+            },
+            "images": fpfn_index,
+        }
+        try:
+            with open(fpfn_dir / "index.json", "w", encoding="utf-8") as f:
+                json.dump(index_payload, f, indent=2)
+            print(
+                f"evaluate: FP/FN index written ({len(fpfn_index)} images, "
+                f"{total_fp} FP, {total_fn} FN)"
+            )
+        except OSError as e:
+            print(f"evaluate: failed to write FP/FN index: {e}", file=sys.stderr)
 
     # Disarm watchdog before returning
     _watchdog["done"] = True
@@ -532,9 +802,39 @@ if __name__ == "__main__":
     parser.add_argument("--data", default="person_dataset/person.yaml", help="Dataset YAML")
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--pipeline-dir", default=None, help="Large images dir for pipeline eval")
+    parser.add_argument(
+        "--export-fpfn",
+        default=None,
+        metavar="DIR",
+        help="Write per-image FP/FN JSON + top-K crops to DIR (for v2 Data Curator agent). "
+             "Falls back to AUTORESEARCH_FPFN_DIR env var. Default: disabled.",
+    )
+    parser.add_argument(
+        "--fpfn-topk",
+        type=int,
+        default=None,
+        help="Max crops per image per category (FP and FN). Falls back to "
+             "AUTORESEARCH_FPFN_TOPK env var. Default: 10.",
+    )
+    parser.add_argument(
+        "--fpfn-iou",
+        type=float,
+        default=0.5,
+        help="IoU threshold for matching predictions to GT (default 0.5).",
+    )
     args = parser.parse_args()
 
-    metrics = evaluate_model(args.model, args.data, args.imgsz)
+    fpfn_dir = _resolve_fpfn_dir(args.export_fpfn)
+    fpfn_topk = _resolve_fpfn_topk(args.fpfn_topk)
+
+    metrics = evaluate_model(
+        args.model,
+        args.data,
+        args.imgsz,
+        fpfn_dir=fpfn_dir,
+        fpfn_topk=fpfn_topk,
+        fpfn_iou=args.fpfn_iou,
+    )
     print_metrics(metrics)
 
     if args.pipeline_dir:
