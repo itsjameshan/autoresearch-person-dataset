@@ -30,8 +30,7 @@ COS_LR = True
 PATIENCE = 30
 
 LR0 = 0.01
-LRF = 0.01
-
+LRF = 0.005  # Reduced LRF
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
@@ -41,7 +40,7 @@ SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
 MOSAIC = 0.99  # Increased mosaic
-MIXUP = 0.25  # Increased mixup
+MIXUP = 0.2  # Increased mixup
 COPY_PASTE = 0.15
 ERASING = 0.4
 CLOSE_MOSAIC = 15
