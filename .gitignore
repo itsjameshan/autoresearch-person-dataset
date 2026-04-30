@@ -24,6 +24,14 @@ wandb/
 result/
 run.log
 
+# ==================== Autoresearch v2 ====================
+person_dataset/autoresearch_v2/state.db
+person_dataset/autoresearch_v2/state.db-journal
+person_dataset/autoresearch_v2/state.db-wal
+person_dataset/autoresearch_v2/state.db-shm
+fpfn/
+fpfn_*/
+
 # ==================== ONNX data ====================
 *.onnx.data
 onnx_data/

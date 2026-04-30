@@ -628,6 +628,23 @@ def evaluate_model(
     except OSError as e:
         print(f"evaluate: failed to write {METRICS_JSON_PATH}: {e}", file=sys.stderr)
 
+    # ── Optional: write metrics to v2 state.db (P1) ──
+    state_db_path = os.environ.get("AUTORESEARCH_STATE_DB", "").strip()
+    if state_db_path:
+        try:
+            from person_dataset.autoresearch_v2 import db as _state_db
+            sha = _state_db.get_current_git_sha()
+            if sha:
+                _state_db.init_db(state_db_path)
+                _state_db.record_metrics(state_db_path, sha, tile_metrics=metrics)
+            else:
+                print(
+                    "evaluate: state.db write skipped (could not resolve git HEAD)",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(f"evaluate: state.db write failed: {e}", file=sys.stderr)
+
     # ── FP/FN index (only when --export-fpfn was used) ──
     if fpfn_enabled:
         total_fp = sum(e["fp_count"] for e in fpfn_index.values())

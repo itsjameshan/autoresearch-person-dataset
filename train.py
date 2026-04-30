@@ -178,7 +178,37 @@ if __name__ == "__main__":
     print(f"Loss: box={BOX} cls={CLS}")
     print()
 
+    # ── Optional: mark experiment 'started' in v2 state.db (P1) ──
+    import time as _time
+    _state_db_path = os.environ.get("AUTORESEARCH_STATE_DB", "").strip()
+    _train_started_at = _time.time()
+    _train_sha = None
+    if _state_db_path:
+        try:
+            from person_dataset.autoresearch_v2 import db as _state_db
+            _train_sha = _state_db.get_current_git_sha()
+            if _train_sha:
+                _state_db.init_db(_state_db_path)
+                _state_db.upsert_experiment(
+                    _state_db_path, _train_sha,
+                    status="started",
+                    started_at=_train_started_at,
+                )
+        except Exception as _e:
+            print(f"train: state.db 'started' write failed: {_e}", file=sys.stderr)
+
     best_pt, epochs_completed = train()
+
+    if _state_db_path and _train_sha:
+        try:
+            _state_db.upsert_experiment(
+                _state_db_path, _train_sha,
+                status="trained",
+                gpu_minutes=round((_time.time() - _train_started_at) / 60.0, 2),
+                epochs_completed=epochs_completed,
+            )
+        except Exception as _e:
+            print(f"train: state.db 'trained' write failed: {_e}", file=sys.stderr)
 
     print()
     print(f"=== Evaluation (model: {best_pt}) ===")
