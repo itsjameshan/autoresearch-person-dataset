@@ -1,14 +1,16 @@
 """
-architecture_supervisor.py — 架构合规监督智能体
+architecture_supervisor.py — 架构合规监督智能体 (v2)
 
 职责:
-  1. 读取 architecture.md 作为"架构宪法"
-  2. 监督 Researcher / Curator / Triage 三个智能体是否按架构设计执行
+  1. 读取 architecture_v2.md 作为"架构宪法"
+  2. 监督 Researcher / Curator / Triage 三个智能体是否按 v2 架构设计执行
   3. 校验智能体输出是否符合 JSON Schema 合约
-  4. 校验 Orchestrator 流程是否遵循架构规定
-  5. 校验代码结构是否与架构文档一致
-  6. 校验预算守门 / HITL 门是否正确触发
-  7. 生成合规报告，标记违规项
+  4. 校验 Researcher 的 config_patch 是否锁定到 28 变量白名单 + MODEL 路径约束
+  5. 校验 Orchestrator 流程是否遵循 v2 架构（双阶段评估、新终止条件等）
+  6. 校验代码结构是否与 v2 架构文档一致
+  7. 校验预算守门 / HITL 门是否正确触发
+  8. 校验 LLM 后端是否为纯 Ollama（不加 anthropic）
+  9. 生成合规报告，标记违规项
 
 运行方式:
   python -m autoresearch_v2.agents.architecture_supervisor
@@ -24,14 +26,11 @@ import os
 import re
 import sys
 import time
-import ast
-import inspect
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
-ARCHITECTURE_MD = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "architecture.md"
+ARCHITECTURE_V2_MD = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "architecture_v2.md"
 ))
 V2_ROOT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".."
@@ -39,6 +38,15 @@ V2_ROOT = os.path.normpath(os.path.join(
 PROJECT_ROOT = os.path.normpath(os.path.join(V2_ROOT, ".."))
 
 COMPLIANCE_LOG = os.path.join(V2_ROOT, "state", "compliance_audit.jsonl")
+
+TRAIN_PY_WHITELIST_VARS = [
+    "MODEL", "DATA_YAML", "EPOCHS", "BATCH", "IMGSZ", "LR0", "LRF",
+    "MOMENTUM", "WEIGHT_DECAY", "WARMUP_EPOCHS", "WARMUP_MOMENTUM",
+    "BOX", "CLS", "DFL", "POSE", "KOBJ", "LABEL_SMOOTHING",
+    "MOSAIC", "MIXUP", "COPY_PASTE", "DEGREES", "TRANSLATE",
+    "SCALE", "SHEAR", "FLIPUD", "FLIPLR", "HSV_H", "HSV_S", "HSV_V",
+    "ERASING", "PATIENCE", "SAVE_PERIOD", "WORKERS", "AMP",
+]
 
 
 def _log(msg: str, level: str = "INFO"):
@@ -95,8 +103,8 @@ ARCHITECTURE_RULES = {
         "category": "agent_structure",
     },
     "ARCH-002": {
-        "name": "智能体模型分配",
-        "description": "Researcher=Sonnet, Curator=Sonnet+Vision, Triage=Haiku",
+        "name": "智能体模型分配(v2)",
+        "description": "v2: 全部本地 Ollama — Researcher=qwen2.5:14b/32b, Curator=qwen2-vl:7b/llava:13b, Triage=qwen2.5:7b/phi3:14b",
         "severity": Violation.WARNING,
         "category": "agent_structure",
     },
@@ -125,14 +133,14 @@ ARCHITECTURE_RULES = {
         "category": "hitl",
     },
     "ARCH-007": {
-        "name": "终止条件",
-        "description": "必须实现5个终止条件: CDS达标/平台期/预算耗尽/连续失败/人工stop",
+        "name": "终止条件(v2)",
+        "description": "v2: CDS达标/平台期/预算耗尽/连续失败/人工stop/pipeline-tile背离/LLM失败率>30%",
         "severity": Violation.CRITICAL,
         "category": "orchestrator",
     },
     "ARCH-008": {
-        "name": "HPO用Optuna",
-        "description": "超参搜索必须用 Optuna，Researcher 不再手动试参数",
+        "name": "HPO用Optuna串行TPE",
+        "description": "v2: 超参搜索必须用 Optuna 串行 TPE（单 GPU 约束）",
         "severity": Violation.WARNING,
         "category": "deterministic_tools",
     },
@@ -149,8 +157,8 @@ ARCHITECTURE_RULES = {
         "category": "curator",
     },
     "ARCH-011": {
-        "name": "状态层6张表",
-        "description": "SQLite 必须包含 experiments/decisions/data_issues/budget/artifacts/hitl_gates 6张表",
+        "name": "状态层6张表(v2)",
+        "description": "SQLite 必须包含 experiments/decisions/data_issues/budget/artifacts/hitl_gates 6张表，experiments 用 git_sha PK",
         "severity": Violation.CRITICAL,
         "category": "state_layer",
     },
@@ -174,13 +182,13 @@ ARCHITECTURE_RULES = {
     },
     "ARCH-015": {
         "name": "Curator输出落data_issues",
-        "description": "Curator 输出必须写入 data_issues 表",
+        "description": "Curator 输出必须写入 data_issues 表，低置信度 issue 必须人工 review",
         "severity": Violation.WARNING,
         "category": "curator",
     },
     "ARCH-016": {
-        "name": "文件结构合规",
-        "description": "文件结构必须与架构文档定义一致",
+        "name": "文件结构合规(v2)",
+        "description": "v2: 文件结构必须与架构文档定义一致（含 llm_client.py/_json_extract.py/dashboard.py/events.py）",
         "severity": Violation.WARNING,
         "category": "file_structure",
     },
@@ -208,11 +216,83 @@ ARCHITECTURE_RULES = {
         "severity": Violation.CRITICAL,
         "category": "orchestrator",
     },
+    "ARCH-021": {
+        "name": "Researcher config_patch 白名单",
+        "description": "v2: config_patch/config_diff 只允许 train.py 的 28 个白名单变量",
+        "severity": Violation.CRITICAL,
+        "category": "agent_constraint",
+    },
+    "ARCH-022": {
+        "name": "MODEL路径强约束",
+        "description": "v2: MODEL 必须形如 person_dataset/*.pt，禁止裸名触发网络下载",
+        "severity": Violation.CRITICAL,
+        "category": "agent_constraint",
+    },
+    "ARCH-023": {
+        "name": "BATCH上限约束",
+        "description": "v2: BATCH <= 16 @ imgsz=1280（单 GPU 显存约束）",
+        "severity": Violation.WARNING,
+        "category": "agent_constraint",
+    },
+    "ARCH-024": {
+        "name": "双阶段评估",
+        "description": "v2: 每轮迭代必须跑 tile-mode + pipeline-mode 两套评估",
+        "severity": Violation.CRITICAL,
+        "category": "orchestrator",
+    },
+    "ARCH-025": {
+        "name": "双写legacy文件",
+        "description": "v2: SQLite 为主存储，同时写 results.tsv/last_metrics.json/status.md/suggestions.md 维持兼容",
+        "severity": Violation.WARNING,
+        "category": "state_layer",
+    },
+    "ARCH-026": {
+        "name": "纯Ollama后端",
+        "description": "v2: LLM 全部本地 Ollama，不加 anthropic SDK，requirements.txt 不含 anthropic",
+        "severity": Violation.WARNING,
+        "category": "agent_structure",
+    },
+    "ARCH-027": {
+        "name": "Curator风险预案",
+        "description": "v2: 本地视觉模型结果必须标注 confidence，低置信度 issue 必须人工 review 后才进入数据采集队列",
+        "severity": Violation.WARNING,
+        "category": "curator",
+    },
+    "ARCH-028": {
+        "name": "Optuna串行约束",
+        "description": "v2: 单 GPU 串行约束，Optuna 必须用串行 TPE，不并行 trial",
+        "severity": Violation.WARNING,
+        "category": "deterministic_tools",
+    },
+    "ARCH-029": {
+        "name": "pipeline-tile背离检测",
+        "description": "v2: pipeline_metrics 与 tile_metrics 严重背离(>10%差距3轮)时触发 HITL",
+        "severity": Violation.WARNING,
+        "category": "orchestrator",
+    },
+    "ARCH-030": {
+        "name": "LLM失败率halt",
+        "description": "v2: LLM 调用失败率 > 30% 时必须 halt",
+        "severity": Violation.CRITICAL,
+        "category": "orchestrator",
+    },
+    "ARCH-031": {
+        "name": "evaluate.py FP/FN导出",
+        "description": "v2: evaluate.py 必须支持 --export-fpfn 参数导出 per-image FP/FN 数据",
+        "severity": Violation.WARNING,
+        "category": "deterministic_tools",
+    },
+    "ARCH-032": {
+        "name": "ollama_runner并存",
+        "description": "v2: ollama_runner.py 完整保留在原位，v2 系统在子目录独立运行",
+        "severity": Violation.INFO,
+        "category": "file_structure",
+    },
 }
 
 
 class AgentOutputValidator:
-    """校验智能体输出是否符合架构合约"""
+    """校验智能体输出是否符合 v2 架构合约"""
 
     def __init__(self, state=None):
         self.state = state
@@ -222,6 +302,8 @@ class AgentOutputValidator:
 
     def _load_schemas(self):
         schema_dir = os.path.join(V2_ROOT, "schemas")
+        if not os.path.exists(schema_dir):
+            return
         for fname in os.listdir(schema_dir):
             if fname.endswith(".json"):
                 try:
@@ -257,6 +339,13 @@ class AgentOutputValidator:
         schema = self._schemas.get("researcher_decision.json", {})
         valid_actions = schema.get("properties", {}).get("action_type", {}).get("enum", [])
 
+        if not valid_actions:
+            valid_actions = [
+                "patch_train_config", "hpo_sweep", "add_training_data",
+                "change_tiling", "freeze_backbone", "adjust_augmentation",
+                "adjust_loss_weights", "change_model_size", "stop",
+            ]
+
         action = decision.get("action_type", "")
         if valid_actions and action not in valid_actions:
             v = Violation(
@@ -278,6 +367,8 @@ class AgentOutputValidator:
             violations.append(v)
 
         required_fields = schema.get("required", [])
+        if not required_fields:
+            required_fields = ["action_type", "rationale", "estimated_gpu_minutes", "needs_hitl"]
         for field in required_fields:
             if field not in decision:
                 v = Violation(
@@ -288,6 +379,10 @@ class AgentOutputValidator:
                 )
                 violations.append(v)
 
+        config_patch = decision.get("config_patch", decision.get("config_diff", {}))
+        if config_patch and isinstance(config_patch, dict):
+            violations.extend(self._validate_config_patch(config_patch))
+
         if "needs_hitl" in decision and decision["needs_hitl"] is None:
             v = Violation(
                 "ARCH-003", "contract", Violation.WARNING,
@@ -297,10 +392,60 @@ class AgentOutputValidator:
 
         return violations
 
+    def _validate_config_patch(self, config_patch: dict) -> list[Violation]:
+        violations = []
+        whitelist_set = set(TRAIN_PY_WHITELIST_VARS)
+
+        for key in config_patch:
+            if key not in whitelist_set:
+                v = Violation(
+                    "ARCH-021", "agent_constraint", Violation.CRITICAL,
+                    f"Researcher config_patch 包含非白名单变量: {key}",
+                    f"白名单变量: {sorted(whitelist_set)}",
+                    f"移除 {key}，只允许 train.py 的 28 个白名单变量"
+                )
+                violations.append(v)
+
+            if key == "MODEL":
+                model_val = config_patch[key]
+                if isinstance(model_val, str):
+                    if not model_val.startswith("person_dataset/"):
+                        v = Violation(
+                            "ARCH-022", "agent_constraint", Violation.CRITICAL,
+                            f"MODEL 路径违反强约束: {model_val}",
+                            "v2: MODEL 必须形如 person_dataset/*.pt，禁止裸名触发网络下载",
+                            f"改为 person_dataset/{model_val} 或 person_dataset/<filename>.pt"
+                        )
+                        violations.append(v)
+                    if not model_val.endswith(".pt"):
+                        v = Violation(
+                            "ARCH-022", "agent_constraint", Violation.WARNING,
+                            f"MODEL 路径不以 .pt 结尾: {model_val}",
+                        )
+                        violations.append(v)
+
+            if key == "BATCH":
+                try:
+                    batch_val = int(config_patch[key])
+                    if batch_val > 16:
+                        v = Violation(
+                            "ARCH-023", "agent_constraint", Violation.WARNING,
+                            f"BATCH={batch_val} 超过上限 16 (imgsz=1280 单GPU约束)",
+                            "v2: BATCH <= 16 @ imgsz=1280",
+                            "将 BATCH 降为 16 或以下"
+                        )
+                        violations.append(v)
+                except (TypeError, ValueError):
+                    pass
+
+        return violations
+
     def _validate_curator_output(self, report: dict) -> list[Violation]:
         violations = []
         schema = self._schemas.get("curator_report.json", {})
         required_fields = schema.get("required", [])
+        if not required_fields:
+            required_fields = ["worst_failure_modes", "suspected_label_errors", "underrepresented_scenarios"]
 
         for field in required_fields:
             if field not in report:
@@ -325,6 +470,8 @@ class AgentOutputValidator:
         violations = []
         schema = self._schemas.get("triage_diagnosis.json", {})
         valid_actions = schema.get("properties", {}).get("recommended_action", {}).get("enum", [])
+        if not valid_actions:
+            valid_actions = ["rollback", "retry_with_fix", "escalate_human"]
 
         action = diagnosis.get("recommended_action", "")
         if valid_actions and action not in valid_actions:
@@ -371,10 +518,12 @@ class AgentOutputValidator:
             rationale = d.get("rationale", "")
 
             if agent == "researcher":
-                valid_actions = ["hpo_sweep", "add_training_data", "change_tiling",
-                                 "freeze_backbone", "adjust_augmentation",
-                                 "adjust_loss_weights", "change_model_size", "stop",
-                                 "quick_diagnosis"]
+                valid_actions = [
+                    "patch_train_config", "hpo_sweep", "add_training_data",
+                    "change_tiling", "freeze_backbone", "adjust_augmentation",
+                    "adjust_loss_weights", "change_model_size", "stop",
+                    "quick_diagnosis",
+                ]
                 if action not in valid_actions:
                     v = Violation(
                         "ARCH-004", "agent_constraint", Violation.CRITICAL,
@@ -405,26 +554,26 @@ class AgentOutputValidator:
 
 
 class OrchestratorFlowValidator:
-    """校验 Orchestrator 流程是否遵循架构规定"""
+    """校验 Orchestrator 流程是否遵循 v2 架构规定"""
 
     def __init__(self, state=None):
         self.state = state
         self.violations = []
 
+    def _read_orchestrator_code(self) -> str:
+        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
+        if not os.path.exists(orch_path):
+            return ""
+        with open(orch_path, "r", encoding="utf-8") as f:
+            return f.read()
+
     def validate_terminations(self) -> list[Violation]:
         violations = []
-        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
-
-        if not os.path.exists(orch_path):
-            v = Violation(
-                "ARCH-007", "orchestrator", Violation.CRITICAL,
-                "orchestrator.py 不存在",
-            )
+        code = self._read_orchestrator_code()
+        if not code:
+            v = Violation("ARCH-007", "orchestrator", Violation.CRITICAL, "orchestrator.py 不存在")
             violations.append(v)
             return violations
-
-        with open(orch_path, "r", encoding="utf-8") as f:
-            code = f.read()
 
         required_terminations = {
             "CDS达标": [r"target_cds", r"CDS.*>=", r"cds.*>=.*target"],
@@ -432,15 +581,18 @@ class OrchestratorFlowValidator:
             "预算耗尽": [r"BudgetExceeded", r"budget.*exceed", r"预算"],
             "连续失败": [r"consecutive_fail", r"MAX_CONSECUTIVE_FAILS", r"连续.*失败"],
             "人工stop": [r"stop_signal", r"STOP", r"人工.*停止"],
+            "pipeline-tile背离": [r"pipeline.*tile.*背离", r"tile.*pipeline.*diverg", r"pipeline_metrics.*tile_metrics"],
+            "LLM失败率halt": [r"llm.*fail.*rate", r"LLM.*失败率", r"halt.*llm", r"llm_failure"],
         }
 
         for name, patterns in required_terminations.items():
             found = any(re.search(p, code, re.IGNORECASE) for p in patterns)
             if not found:
+                severity = Violation.CRITICAL if name in ("CDS达标", "预算耗尽", "连续失败", "人工stop") else Violation.WARNING
                 v = Violation(
-                    "ARCH-007", "orchestrator", Violation.CRITICAL,
+                    "ARCH-007", "orchestrator", severity,
                     f"Orchestrator 缺少终止条件: {name}",
-                    "架构要求5个终止条件全部实现",
+                    "v2 架构要求终止条件全部实现",
                     f"在 orchestrator.py 中实现 {name} 终止条件"
                 )
                 violations.append(v)
@@ -449,13 +601,9 @@ class OrchestratorFlowValidator:
 
     def validate_budget_gate(self) -> list[Violation]:
         violations = []
-        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
-
-        if not os.path.exists(orch_path):
+        code = self._read_orchestrator_code()
+        if not code:
             return violations
-
-        with open(orch_path, "r", encoding="utf-8") as f:
-            code = f.read()
 
         if "budget.reserve" not in code and "budget.check_remaining" not in code:
             v = Violation(
@@ -479,13 +627,9 @@ class OrchestratorFlowValidator:
 
     def validate_hitl_gate(self) -> list[Violation]:
         violations = []
-        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
-
-        if not os.path.exists(orch_path):
+        code = self._read_orchestrator_code()
+        if not code:
             return violations
-
-        with open(orch_path, "r", encoding="utf-8") as f:
-            code = f.read()
 
         if "needs_hitl" not in code:
             v = Violation(
@@ -506,13 +650,9 @@ class OrchestratorFlowValidator:
 
     def validate_flow_sequence(self) -> list[Violation]:
         violations = []
-        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
-
-        if not os.path.exists(orch_path):
+        code = self._read_orchestrator_code()
+        if not code:
             return violations
-
-        with open(orch_path, "r", encoding="utf-8") as f:
-            code = f.read()
 
         flow_steps = [
             ("读取实验快照", r"get_recent_experiments|read_recent"),
@@ -537,13 +677,9 @@ class OrchestratorFlowValidator:
 
     def validate_stagnation_detection(self) -> list[Violation]:
         violations = []
-        orch_path = os.path.join(V2_ROOT, "orchestrator.py")
-
-        if not os.path.exists(orch_path):
+        code = self._read_orchestrator_code()
+        if not code:
             return violations
-
-        with open(orch_path, "r", encoding="utf-8") as f:
-            code = f.read()
 
         if "stagnat" not in code.lower():
             v = Violation(
@@ -563,6 +699,67 @@ class OrchestratorFlowValidator:
 
         return violations
 
+    def validate_dual_evaluation(self) -> list[Violation]:
+        violations = []
+        code = self._read_orchestrator_code()
+        if not code:
+            return violations
+
+        has_tile_eval = bool(re.search(r"tile.*eval|eval.*tile", code, re.IGNORECASE))
+        has_pipeline_eval = bool(re.search(r"pipeline.*eval|eval.*pipeline", code, re.IGNORECASE))
+
+        if not has_pipeline_eval:
+            eval_disp_path = os.path.join(V2_ROOT, "tools", "eval_dispatcher.py")
+            if os.path.exists(eval_disp_path):
+                with open(eval_disp_path, "r", encoding="utf-8") as f:
+                    eval_code = f.read()
+                has_pipeline_eval = bool(re.search(r"pipeline", eval_code, re.IGNORECASE))
+
+        if not has_pipeline_eval:
+            v = Violation(
+                "ARCH-024", "orchestrator", Violation.WARNING,
+                "未检测到 pipeline-mode 评估",
+                "v2: 每轮迭代必须跑 tile-mode + pipeline-mode 两套评估",
+                "在 eval_dispatcher 或 orchestrator 中添加 pipeline 评估步骤"
+            )
+            violations.append(v)
+
+        return violations
+
+    def validate_pipeline_tile_divergence(self) -> list[Violation]:
+        violations = []
+        code = self._read_orchestrator_code()
+        if not code:
+            return violations
+
+        if not re.search(r"pipeline.*tile.*diverg|tile.*pipeline.*背离|pipeline_metrics.*tile_metrics", code, re.IGNORECASE):
+            v = Violation(
+                "ARCH-029", "orchestrator", Violation.WARNING,
+                "未检测到 pipeline-tile 背离检测逻辑",
+                "v2: pipeline_metrics 与 tile_metrics 严重背离(>10%差距3轮)时触发 HITL",
+                "添加 pipeline_metrics vs tile_metrics 背离检测"
+            )
+            violations.append(v)
+
+        return violations
+
+    def validate_llm_failure_halt(self) -> list[Violation]:
+        violations = []
+        code = self._read_orchestrator_code()
+        if not code:
+            return violations
+
+        if not re.search(r"llm.*fail|llm_failure|失败率.*halt|halt.*llm", code, re.IGNORECASE):
+            v = Violation(
+                "ARCH-030", "orchestrator", Violation.WARNING,
+                "未检测到 LLM 失败率 halt 逻辑",
+                "v2: LLM 调用失败率 > 30% 时必须 halt",
+                "添加 LLM 调用失败率统计和 halt 机制"
+            )
+            violations.append(v)
+
+        return violations
+
     def validate_all(self) -> list[Violation]:
         violations = []
         violations.extend(self.validate_terminations())
@@ -570,23 +767,29 @@ class OrchestratorFlowValidator:
         violations.extend(self.validate_hitl_gate())
         violations.extend(self.validate_flow_sequence())
         violations.extend(self.validate_stagnation_detection())
+        violations.extend(self.validate_dual_evaluation())
+        violations.extend(self.validate_pipeline_tile_divergence())
+        violations.extend(self.validate_llm_failure_halt())
         return violations
 
 
 class CodeStructureValidator:
-    """校验代码结构是否与架构文档一致"""
+    """校验代码结构是否与 v2 架构文档一致"""
 
-    EXPECTED_FILES = {
+    EXPECTED_FILES_V2 = {
         "orchestrator.py": "主驱动，替代 ollama_runner.py",
-        "db.py": "SQLite schema + DAO",
+        "db.py": "SQLite schema + DAO + 双写 legacy",
         "budget.py": "预算守门",
         "hitl.py": "人工审批门",
+        "_json_extract.py": "v2: 共享 JSON 提取工具",
+        "events.py": "v2: 活动事件流",
+        "dashboard.py": "v2: 只读仪表盘",
         "agents/__init__.py": "agents 包",
-        "agents/researcher.py": "主决策 agent",
+        "agents/researcher.py": "主决策 agent（含 28 变量白名单校验）",
         "agents/curator.py": "数据策展 agent (vision)",
         "agents/triage.py": "故障定级 agent",
         "tools/__init__.py": "tools 包",
-        "tools/optuna_runner.py": "HPO 搜索",
+        "tools/optuna_runner.py": "HPO 搜索（串行 TPE）",
         "tools/train_dispatcher.py": "包装 train.py",
         "tools/eval_dispatcher.py": "包装 evaluate.py + FP/FN 提取",
         "schemas/researcher_decision.json": "Researcher 输出 schema",
@@ -602,6 +805,7 @@ class CodeStructureValidator:
         "evaluate.py",
         "data_quality.py",
         "build_pipeline_val.py",
+        "ollama_runner.py",
     ]
 
     def __init__(self):
@@ -610,7 +814,7 @@ class CodeStructureValidator:
     def validate_file_structure(self) -> list[Violation]:
         violations = []
 
-        for rel_path, desc in self.EXPECTED_FILES.items():
+        for rel_path, desc in self.EXPECTED_FILES_V2.items():
             full_path = os.path.join(V2_ROOT, rel_path)
             if not os.path.exists(full_path):
                 v = Violation(
@@ -643,16 +847,13 @@ class CodeStructureValidator:
         agents_dir = os.path.join(V2_ROOT, "agents")
 
         if not os.path.exists(agents_dir):
-            v = Violation(
-                "ARCH-001", "agent_structure", Violation.CRITICAL,
-                "agents/ 目录不存在",
-            )
+            v = Violation("ARCH-001", "agent_structure", Violation.CRITICAL, "agents/ 目录不存在")
             violations.append(v)
             return violations
 
         agent_files = [f for f in os.listdir(agents_dir)
                        if f.endswith(".py") and f != "__init__.py"
-                       and not f.startswith("architecture_supervisor")]
+                       and not f.startswith("_") and not f.startswith("architecture_supervisor")]
 
         expected_agents = {"researcher.py", "curator.py", "triage.py"}
         actual_agents = set(agent_files)
@@ -745,11 +946,7 @@ class CodeStructureValidator:
         optuna_path = os.path.join(V2_ROOT, "tools", "optuna_runner.py")
 
         if not os.path.exists(optuna_path):
-            v = Violation(
-                "ARCH-008", "deterministic_tools", Violation.WARNING,
-                "tools/optuna_runner.py 不存在",
-                "架构要求 HPO 使用 Optuna",
-            )
+            v = Violation("ARCH-008", "deterministic_tools", Violation.WARNING, "tools/optuna_runner.py 不存在")
             violations.append(v)
             return violations
 
@@ -757,17 +954,11 @@ class CodeStructureValidator:
             code = f.read()
 
         if "import optuna" not in code:
-            v = Violation(
-                "ARCH-008", "deterministic_tools", Violation.CRITICAL,
-                "optuna_runner.py 未导入 optuna",
-            )
+            v = Violation("ARCH-008", "deterministic_tools", Violation.CRITICAL, "optuna_runner.py 未导入 optuna")
             violations.append(v)
 
         if "suggest_float" not in code and "suggest_int" not in code:
-            v = Violation(
-                "ARCH-008", "deterministic_tools", Violation.WARNING,
-                "optuna_runner.py 未使用 Optuna 的 suggest API",
-            )
+            v = Violation("ARCH-008", "deterministic_tools", Violation.WARNING, "optuna_runner.py 未使用 Optuna 的 suggest API")
             violations.append(v)
 
         return violations
@@ -817,10 +1008,7 @@ class CodeStructureValidator:
         db_path = os.path.join(V2_ROOT, "db.py")
 
         if not os.path.exists(db_path):
-            v = Violation(
-                "ARCH-011", "state_layer", Violation.CRITICAL,
-                "db.py 不存在",
-            )
+            v = Violation("ARCH-011", "state_layer", Violation.CRITICAL, "db.py 不存在")
             violations.append(v)
             return violations
 
@@ -852,6 +1040,122 @@ class CodeStructureValidator:
 
         return violations
 
+    def validate_ollama_only(self) -> list[Violation]:
+        violations = []
+        req_path = os.path.join(PROJECT_ROOT, "requirements.txt")
+
+        if os.path.exists(req_path):
+            with open(req_path, "r", encoding="utf-8") as f:
+                req_content = f.read().lower()
+            if "anthropic" in req_content:
+                v = Violation(
+                    "ARCH-026", "agent_structure", Violation.WARNING,
+                    "requirements.txt 包含 anthropic 依赖",
+                    "v2: LLM 全部本地 Ollama，不加 anthropic SDK",
+                    "从 requirements.txt 移除 anthropic"
+                )
+                violations.append(v)
+
+        for agent_file in ["researcher.py", "curator.py", "triage.py"]:
+            fpath = os.path.join(V2_ROOT, "agents", agent_file)
+            if not os.path.exists(fpath):
+                continue
+            with open(fpath, "r", encoding="utf-8") as f:
+                code = f.read()
+            if "import anthropic" in code:
+                v = Violation(
+                    "ARCH-026", "agent_structure", Violation.WARNING,
+                    f"agents/{agent_file} 导入了 anthropic SDK",
+                    "v2: LLM 全部本地 Ollama，不应依赖 anthropic",
+                    "移除 anthropic 导入，改用 Ollama HTTP 客户端"
+                )
+                violations.append(v)
+
+        return violations
+
+    def validate_dual_write_legacy(self) -> list[Violation]:
+        violations = []
+        db_path = os.path.join(V2_ROOT, "db.py")
+
+        if not os.path.exists(db_path):
+            return violations
+
+        with open(db_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        legacy_writes = {
+            "results.tsv": [r"results\.tsv"],
+            "last_metrics.json": [r"last_metrics\.json"],
+            "status.md": [r"status\.md"],
+        }
+
+        for fname, patterns in legacy_writes.items():
+            if not any(re.search(p, code) for p in patterns):
+                v = Violation(
+                    "ARCH-025", "state_layer", Violation.WARNING,
+                    f"db.py 未检测到对 {fname} 的双写",
+                    "v2: SQLite 为主存储，同时写 legacy 文件维持兼容",
+                    f"在 db.py 中添加对 {fname} 的双写逻辑"
+                )
+                violations.append(v)
+
+        return violations
+
+    def validate_evaluate_fpfn_export(self) -> list[Violation]:
+        violations = []
+        eval_path = os.path.join(PROJECT_ROOT, "evaluate.py")
+
+        if not os.path.exists(eval_path):
+            return violations
+
+        with open(eval_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        if "export-fpfn" not in code and "export_fpfn" not in code:
+            v = Violation(
+                "ARCH-031", "deterministic_tools", Violation.WARNING,
+                "evaluate.py 未支持 --export-fpfn 参数",
+                "v2: evaluate.py 必须支持 FP/FN 导出给 Curator 使用",
+                "在 evaluate.py 中添加 --export-fpfn DIR 参数"
+            )
+            violations.append(v)
+
+        return violations
+
+    def validate_ollama_runner_coexistence(self) -> list[Violation]:
+        violations = []
+        ollama_path = os.path.join(PROJECT_ROOT, "ollama_runner.py")
+
+        if not os.path.exists(ollama_path):
+            v = Violation(
+                "ARCH-032", "file_structure", Violation.INFO,
+                "ollama_runner.py 不存在（v2 架构要求保留作为 legacy 对照基线）",
+            )
+            violations.append(v)
+
+        return violations
+
+    def validate_optuna_serial(self) -> list[Violation]:
+        violations = []
+        optuna_path = os.path.join(V2_ROOT, "tools", "optuna_runner.py")
+
+        if not os.path.exists(optuna_path):
+            return violations
+
+        with open(optuna_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        if "n_jobs" in code and re.search(r"n_jobs\s*[=>]\s*[2-9]", code):
+            v = Violation(
+                "ARCH-028", "deterministic_tools", Violation.WARNING,
+                "optuna_runner.py 设置了 n_jobs > 1",
+                "v2: 单 GPU 串行约束，Optuna 必须用串行 TPE",
+                "移除 n_jobs 参数或设为 n_jobs=1"
+            )
+            violations.append(v)
+
+        return violations
+
     def validate_all(self) -> list[Violation]:
         violations = []
         violations.extend(self.validate_file_structure())
@@ -862,6 +1166,11 @@ class CodeStructureValidator:
         violations.extend(self.validate_optuna_usage())
         violations.extend(self.validate_curator_constraints())
         violations.extend(self.validate_state_tables())
+        violations.extend(self.validate_ollama_only())
+        violations.extend(self.validate_dual_write_legacy())
+        violations.extend(self.validate_evaluate_fpfn_export())
+        violations.extend(self.validate_ollama_runner_coexistence())
+        violations.extend(self.validate_optuna_serial())
         return violations
 
 
@@ -876,7 +1185,7 @@ class ComplianceReporter:
 
     def generate_report(self) -> str:
         lines = []
-        lines.append("# 架构合规监督报告")
+        lines.append("# 架构合规监督报告 (v2)")
         lines.append(f"\n生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
         total = len(self.violations)
@@ -914,25 +1223,26 @@ class ComplianceReporter:
             lines.append(f"| {cat} | {c} | {w} | {i} |")
         lines.append("")
 
-        lines.append("## 违规详情\n")
-        for v in sorted(self.violations, key=lambda x: (
-                0 if x.severity == Violation.CRITICAL else 1 if x.severity == Violation.WARNING else 2,
-                x.rule_id)):
-            icon = "🚨" if v.severity == Violation.CRITICAL else "⚠️" if v.severity == Violation.WARNING else "📋"
-            rule_info = ARCHITECTURE_RULES.get(v.rule_id, {})
-            rule_name = rule_info.get("name", v.rule_id)
+        if self.violations:
+            lines.append("## 违规详情\n")
+            for v in sorted(self.violations, key=lambda x: (
+                    0 if x.severity == Violation.CRITICAL else 1 if x.severity == Violation.WARNING else 2,
+                    x.rule_id)):
+                icon = "🚨" if v.severity == Violation.CRITICAL else "⚠️" if v.severity == Violation.WARNING else "📋"
+                rule_info = ARCHITECTURE_RULES.get(v.rule_id, {})
+                rule_name = rule_info.get("name", v.rule_id)
 
-            lines.append(f"### {icon} [{v.rule_id}] {rule_name}\n")
-            lines.append(f"- **严重级别**: {v.severity}")
-            lines.append(f"- **类别**: {v.category}")
-            lines.append(f"- **违规描述**: {v.message}")
-            if v.detail:
-                lines.append(f"- **详情**: {v.detail}")
-            if v.fix_suggestion:
-                lines.append(f"- **修复建议**: {v.fix_suggestion}")
-            lines.append("")
+                lines.append(f"### {icon} [{v.rule_id}] {rule_name}\n")
+                lines.append(f"- **严重级别**: {v.severity}")
+                lines.append(f"- **类别**: {v.category}")
+                lines.append(f"- **违规描述**: {v.message}")
+                if v.detail:
+                    lines.append(f"- **详情**: {v.detail}")
+                if v.fix_suggestion:
+                    lines.append(f"- **修复建议**: {v.fix_suggestion}")
+                lines.append("")
 
-        lines.append("## 架构规则检查清单\n")
+        lines.append("## 架构规则检查清单 (v2)\n")
         lines.append("| 规则ID | 规则名称 | 状态 |")
         lines.append("|--------|----------|------|")
 
@@ -965,7 +1275,7 @@ class ComplianceReporter:
 
 
 class ArchitectureSupervisorAgent:
-    """架构合规监督智能体主类"""
+    """架构合规监督智能体主类 (v2)"""
 
     def __init__(self, state=None):
         self.state = state
@@ -1009,7 +1319,7 @@ class ArchitectureSupervisorAgent:
 
     def check_all(self) -> str:
         _log("=" * 60)
-        _log("  架构合规监督智能体 — 全面检查")
+        _log("  架构合规监督智能体 (v2) — 全面检查")
         _log("=" * 60)
 
         all_violations = []
@@ -1051,7 +1361,7 @@ class ArchitectureSupervisorAgent:
 
     def watch(self, interval: int = 60):
         _log("=" * 60)
-        _log("  架构合规监督智能体 — 持续监控模式")
+        _log("  架构合规监督智能体 (v2) — 持续监控模式")
         _log(f"  检查间隔: {interval}秒")
         _log("=" * 60)
 
@@ -1067,7 +1377,7 @@ class ArchitectureSupervisorAgent:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="架构合规监督智能体")
+    parser = argparse.ArgumentParser(description="架构合规监督智能体 (v2)")
     parser.add_argument("--check", type=str, default="all",
                         choices=["code", "decisions", "flow", "all"],
                         help="检查类型")
