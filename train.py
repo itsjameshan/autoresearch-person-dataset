@@ -1,11 +1,3 @@
-"""
-train.py — Optimized for Dense Crowd Detection (Windows GPU)
-Each experiment: change hyperparams below, then run:
-  python train.py > run.log 2>&1
-
-HARDWARE: Windows GPU machine with CUDA
-"""
-
 import os
 import sys
 import torch
@@ -48,8 +40,8 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 1.0
-MIXUP = 0.15
+MOSAIC = 0.7  # Increased mosaic
+MIXUP = 0.10  # Reduced mixup
 COPY_PASTE = 0.15
 ERASING = 0.4
 CLOSE_MOSAIC = 15
@@ -61,7 +53,7 @@ CONF = 0.001
 IOU = 0.5
 
 PROJECT = "autoresearch_runs"
-NAME = "exp_baseline_v1"
+NAME = "exp_baseline_v3"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def _abs(rel_or_abs: str) -> str:
