@@ -17,3 +17,6 @@ opencv-python
 onnxruntime
 pandas
 openpyxl
+
+# Autoresearch v2 — multi-agent orchestrator (P5 HPO sweep)
+optuna>=3.5

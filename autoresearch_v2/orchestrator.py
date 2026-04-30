@@ -314,7 +314,83 @@ class Orchestrator:
                 )
             except BudgetExceeded as e:
                 log(f"预算不足: {e}", "CRIT")
+                self.events.emit("halt", reason=f"budget exceeded: {e}")
+                final_status = "budget_exceeded"
                 break
+
+            # ── P5: hpo_sweep dispatch ──────────────────────────────────
+            # When the Researcher requests an HPO sweep, hand off to
+            # OptunaRunner. Each trial trains via train_dispatcher (so
+            # live output + events stream the same as a normal exp), and
+            # each completed trial inserts its own row in state.db with
+            # agent_made_decision='optuna'. After the sweep completes,
+            # the best-trial metrics are already recorded — skip the
+            # orchestrator's per-iteration eval/train block.
+            if decision.get("action_type") == "hpo_sweep":
+                try:
+                    from autoresearch_v2.tools.optuna_runner import (
+                        OptunaRunner, OPTUNA_AVAILABLE,
+                    )
+                    if not OPTUNA_AVAILABLE:
+                        log("optuna 未安装，跳过 hpo_sweep。pip install optuna", "WARN")
+                        self.budget.release_reserved(run_id)
+                        continue
+
+                    n_trials = int(decision.get("n_trials", 10))
+                    search_space = decision.get("search_space") or None
+                    sweep = OptunaRunner(
+                        search_space=search_space,
+                        n_trials=n_trials,
+                        events_logger=self.events,
+                        state=self.state,
+                        budget=self.budget,
+                        budget_period="default",
+                    )
+                    log(f"启动 Optuna 扫描 ({n_trials} trials)", "AGENT")
+                    result = sweep.run()
+                    log(
+                        f"Optuna 完成: best_cds={result.best_cds:.4f} "
+                        f"trial={result.best_trial_number} "
+                        f"completed={result.n_completed}/{result.n_trials}",
+                        "OK",
+                    )
+                    # Reserved budget already consumed inside OptunaRunner per
+                    # trial via budget.commit_actual; release the umbrella
+                    # reservation we made for the meta-action.
+                    try:
+                        self.budget.release_reserved(run_id)
+                    except Exception:
+                        pass
+                    # Apply the winning params back to train.py so the next
+                    # Researcher iteration starts from the new best baseline.
+                    if result.best_params:
+                        from autoresearch_v2.tools.train_dispatcher import apply_config_diff
+                        apply_config_diff(result.best_params)
+                    self.events.emit(
+                        "iteration_end",
+                        iteration=self.iteration,
+                        run_id=run_id,
+                        status="hpo_complete",
+                        duration_sec=round(time.time() - iter_start, 1),
+                        cds=result.best_cds,
+                    )
+                    time.sleep(self.cooldown_sec)
+                    continue
+                except Exception as e:
+                    log(f"Optuna 扫描失败: {e}", "CRIT")
+                    self.events.emit("crash", run_id=run_id,
+                                     reason=f"hpo_sweep: {e}")
+                    self.budget.release_reserved(run_id)
+                    self.consecutive_fails += 1
+                    if self.consecutive_fails >= self.max_consecutive_fails:
+                        self.events.emit(
+                            "halt",
+                            reason=f"{self.max_consecutive_fails} consecutive failures",
+                        )
+                        final_status = "max_consecutive_fails"
+                        break
+                    time.sleep(self.cooldown_sec)
+                    continue
 
             try:
                 best_pt = self.train_dispatcher.dispatch(run_id, decision)
