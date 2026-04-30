@@ -215,3 +215,29 @@ if __name__ == "__main__":
     data_yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DATA_YAML)
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
+
+    # ── P2: Auto-run pipeline (large-image) eval if pipeline_val/ available ──
+    from evaluate import evaluate_pipeline, resolve_pipeline_dir
+    _repo_root = os.path.dirname(os.path.abspath(__file__))
+    _pipeline_dir = resolve_pipeline_dir(repo_root=_repo_root)
+    pipeline_metrics = None
+    if _pipeline_dir is not None:
+        print()
+        print(f"=== Pipeline Eval (large images: {_pipeline_dir}) ===")
+        try:
+            pipeline_metrics = evaluate_pipeline(best_pt, str(_pipeline_dir), IMGSZ)
+        except Exception as _e:
+            print(f"train: pipeline eval failed: {_e}", file=sys.stderr)
+    else:
+        print("train: pipeline eval skipped (set AUTORESEARCH_PIPELINE_DIR or "
+              "place pipeline_val/ at repo root; set AUTORESEARCH_DISABLE_PIPELINE=1 to silence)")
+
+    # ── P2: persist pipeline_metrics into state.db ──
+    if _state_db_path and _train_sha and pipeline_metrics:
+        try:
+            _state_db.record_metrics(
+                _state_db_path, _train_sha,
+                pipeline_metrics=pipeline_metrics,
+            )
+        except Exception as _e:
+            print(f"train: state.db pipeline_metrics write failed: {_e}", file=sys.stderr)

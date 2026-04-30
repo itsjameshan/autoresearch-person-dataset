@@ -706,13 +706,36 @@ def print_metrics(metrics, epochs_completed=0):
     print(f"latency_gate_ms:  {metrics['latency_gate_ms']}")
 
 
-def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms_iou=0.35):
+# Where pipeline metrics are persisted (parallel to last_metrics.json)
+PIPELINE_METRICS_JSON_PATH = "last_pipeline_metrics.json"
+
+# Default IoU threshold for pipeline-level prediction-to-GT matching
+PIPELINE_MATCH_IOU_DEFAULT = 0.5
+
+
+def evaluate_pipeline(
+    model_path,
+    large_images_dir,
+    imgsz=1280,
+    overlap=200,
+    nms_iou=0.35,
+    match_iou=PIPELINE_MATCH_IOU_DEFAULT,
+):
     """Large-image pipeline evaluation.
 
     Simulates deployment: large image → tiles → per-tile detection →
-    coordinate restoration → global NMS → full-image count.
+    coordinate restoration → global NMS → full-image P/R + counting.
 
-    Run every 5 keeps.
+    Returns
+    -------
+    dict with keys:
+        pipeline_precision, pipeline_recall, pipeline_f1
+        pipeline_counting_acc, pipeline_counting_mae
+        pipeline_fps, pipeline_total_sec
+        pipeline_images, pipeline_images_with_gt
+        match_iou, nms_iou
+        details: list of per-image dicts with image, pred_count, gt_count,
+                 tp, fp, fn, counting_accuracy
     """
     from torchvision.ops import nms as torch_nms
 
@@ -728,6 +751,11 @@ def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms
         return {}
 
     results_all = []
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    counting_accs = []
+    counting_errors = []
     t_start = time.time()
 
     for img_path in large_images:
@@ -764,52 +792,182 @@ def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms
                         all_boxes.append([bx1, by1, bx2, by2])
                         all_scores.append(float(scores[bi]))
 
-        # Global NMS
+        # Global NMS — keep boxes + scores after dedup
         if all_boxes:
             boxes_t = torch.tensor(all_boxes, dtype=torch.float32)
             scores_t = torch.tensor(all_scores, dtype=torch.float32)
-            keep_idx = torch_nms(boxes_t, scores_t, nms_iou)
-            final_count = len(keep_idx)
+            keep_idx = torch_nms(boxes_t, scores_t, nms_iou).cpu().numpy().tolist()
+            kept_boxes = [all_boxes[i] for i in keep_idx]
+            kept_scores = [all_scores[i] for i in keep_idx]
+            final_count = len(kept_boxes)
         else:
+            kept_boxes = []
+            kept_scores = []
             final_count = 0
 
         # Load GT for this large image if available
         gt_label = os.path.splitext(img_path)[0] + ".txt"
+        per_image = {
+            "image": os.path.basename(img_path),
+            "pred_count": final_count,
+            "gt_count": -1,
+            "tp": -1,
+            "fp": -1,
+            "fn": -1,
+            "counting_accuracy": -1,
+        }
+
         if os.path.exists(gt_label):
             gt_boxes, _ = load_gt_boxes(gt_label, W, H)
             gt_count = len(gt_boxes)
-            acc = max(0, 1 - abs(final_count - gt_count) / max(gt_count, 1))
-        else:
-            gt_count = -1
-            acc = -1
+            # Pipeline-level FP/FN matching (uses helper from P0)
+            matches, fp_idx, fn_idx = _match_with_indices(
+                kept_boxes, kept_scores, gt_boxes, iou_thresh=match_iou,
+            )
+            tp = len(matches)
+            fp = len(fp_idx)
+            fn = len(fn_idx)
+            total_tp += tp
+            total_fp += fp
+            total_fn += fn
 
-        results_all.append({
-            "image": os.path.basename(img_path),
-            "pred_count": final_count,
-            "gt_count": gt_count,
-            "accuracy": acc,
-        })
+            if gt_count > 0:
+                acc = max(0, 1 - abs(final_count - gt_count) / gt_count)
+            else:
+                acc = 1.0 if final_count == 0 else 0.0
+            counting_accs.append(acc)
+            counting_errors.append(abs(final_count - gt_count))
+
+            per_image.update({
+                "gt_count": gt_count,
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+                "counting_accuracy": round(acc, 4),
+            })
+
+        results_all.append(per_image)
 
     t_total = time.time() - t_start
+    n_images = len(large_images)
+    n_with_gt = sum(1 for r in results_all if r["gt_count"] >= 0)
 
-    # Aggregate
-    valid = [r for r in results_all if r["gt_count"] > 0]
-    global_counting_acc = float(np.mean([r["accuracy"] for r in valid])) if valid else -1
-    pipeline_fps = len(large_images) / max(t_total, 0.001)
+    # Aggregate metrics
+    if total_tp + total_fp > 0:
+        pipeline_precision = total_tp / (total_tp + total_fp)
+    else:
+        pipeline_precision = 0.0
+    if total_tp + total_fn > 0:
+        pipeline_recall = total_tp / (total_tp + total_fn)
+    else:
+        pipeline_recall = 0.0
+    pipeline_f1 = (
+        2 * pipeline_precision * pipeline_recall
+        / (pipeline_precision + pipeline_recall + 1e-6)
+    )
+    pipeline_counting_acc = float(np.mean(counting_accs)) if counting_accs else -1.0
+    pipeline_counting_mae = float(np.mean(counting_errors)) if counting_errors else -1.0
+    pipeline_fps = n_images / max(t_total, 0.001)
 
-    print("---pipeline---")
-    print(f"pipeline_images:       {len(large_images)}")
-    print(f"global_counting_acc:   {global_counting_acc:.4f}" if global_counting_acc >= 0 else "global_counting_acc:   N/A (no GT)")
-    print(f"pipeline_fps:          {pipeline_fps:.2f}")
-    print(f"pipeline_total_sec:    {t_total:.1f}")
-    for r in results_all:
-        print(f"  {r['image']}: pred={r['pred_count']} gt={r['gt_count']} acc={r['accuracy']:.2f}" if r['gt_count'] > 0 else f"  {r['image']}: pred={r['pred_count']} (no GT)")
+    # Quality gate check at the pipeline level (industrial target)
+    pipeline_precision_gate = (
+        "PASS" if pipeline_precision >= PRECISION_GATE
+        else f"FAIL({pipeline_precision:.2f}<{PRECISION_GATE})"
+    )
+    pipeline_recall_gate = (
+        "PASS" if pipeline_recall >= RECALL_GATE
+        else f"FAIL({pipeline_recall:.2f}<{RECALL_GATE})"
+    )
+    pipeline_target_met = (
+        pipeline_precision >= PRECISION_GATE and pipeline_recall >= RECALL_GATE
+    )
 
-    return {
-        "global_counting_acc": global_counting_acc,
-        "pipeline_fps": pipeline_fps,
+    metrics = {
+        "pipeline_precision": round(pipeline_precision, 4),
+        "pipeline_recall": round(pipeline_recall, 4),
+        "pipeline_f1": round(pipeline_f1, 4),
+        "pipeline_counting_acc": round(pipeline_counting_acc, 4) if pipeline_counting_acc >= 0 else -1,
+        "pipeline_counting_mae": round(pipeline_counting_mae, 2) if pipeline_counting_mae >= 0 else -1,
+        "pipeline_fps": round(pipeline_fps, 2),
+        "pipeline_total_sec": round(t_total, 1),
+        "pipeline_images": n_images,
+        "pipeline_images_with_gt": n_with_gt,
+        "pipeline_total_tp": total_tp,
+        "pipeline_total_fp": total_fp,
+        "pipeline_total_fn": total_fn,
+        "pipeline_precision_gate": pipeline_precision_gate,
+        "pipeline_recall_gate": pipeline_recall_gate,
+        "pipeline_target_met": pipeline_target_met,
+        "match_iou": match_iou,
+        "nms_iou": nms_iou,
         "details": results_all,
     }
+
+    print_pipeline_metrics(metrics)
+
+    # Persist to JSON for orchestrator parsing
+    try:
+        with open(PIPELINE_METRICS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2)
+    except OSError as e:
+        print(
+            f"evaluate: failed to write {PIPELINE_METRICS_JSON_PATH}: {e}",
+            file=sys.stderr,
+        )
+
+    return metrics
+
+
+def print_pipeline_metrics(metrics):
+    """Grep-friendly pipeline metrics output (parallel to print_metrics)."""
+    print("---pipeline---")
+    print(f"pipeline_images:           {metrics['pipeline_images']}")
+    print(f"pipeline_images_with_gt:   {metrics['pipeline_images_with_gt']}")
+    print(f"pipeline_precision:        {metrics['pipeline_precision']:.4f}")
+    print(f"pipeline_recall:           {metrics['pipeline_recall']:.4f}")
+    print(f"pipeline_f1:               {metrics['pipeline_f1']:.4f}")
+    if metrics['pipeline_counting_acc'] >= 0:
+        print(f"pipeline_counting_acc:     {metrics['pipeline_counting_acc']:.4f}")
+        print(f"pipeline_counting_mae:     {metrics['pipeline_counting_mae']:.2f}")
+    else:
+        print("pipeline_counting_acc:     N/A (no GT)")
+    print(f"pipeline_fps:              {metrics['pipeline_fps']:.2f}")
+    print(f"pipeline_total_sec:        {metrics['pipeline_total_sec']:.1f}")
+    print(f"pipeline_total_tp:         {metrics['pipeline_total_tp']}")
+    print(f"pipeline_total_fp:         {metrics['pipeline_total_fp']}")
+    print(f"pipeline_total_fn:         {metrics['pipeline_total_fn']}")
+    print(f"pipeline_precision_gate:   {metrics['pipeline_precision_gate']}")
+    print(f"pipeline_recall_gate:      {metrics['pipeline_recall_gate']}")
+    print(f"pipeline_target_met:       {metrics['pipeline_target_met']}")
+    for r in metrics.get("details", []):
+        if r["gt_count"] >= 0:
+            print(
+                f"  {r['image']}: pred={r['pred_count']} gt={r['gt_count']} "
+                f"tp={r['tp']} fp={r['fp']} fn={r['fn']} acc={r['counting_accuracy']:.2f}"
+            )
+        else:
+            print(f"  {r['image']}: pred={r['pred_count']} (no GT)")
+
+
+def resolve_pipeline_dir(cli_value=None, repo_root=None):
+    """Decide which pipeline_val/ directory to use, or None to skip.
+
+    Precedence: CLI arg > AUTORESEARCH_PIPELINE_DIR env var > pipeline_val/ at
+    repo root if it exists. AUTORESEARCH_DISABLE_PIPELINE=1 disables completely.
+    """
+    if os.environ.get("AUTORESEARCH_DISABLE_PIPELINE", "").strip() == "1":
+        return None
+    if cli_value:
+        p = Path(cli_value)
+        return p if p.is_dir() else None
+    raw = os.environ.get("AUTORESEARCH_PIPELINE_DIR", "").strip()
+    if raw:
+        p = Path(raw)
+        return p if p.is_dir() else None
+    # Auto-detect at repo root
+    base = Path(repo_root) if repo_root else Path(__file__).resolve().parent
+    candidate = base / "pipeline_val"
+    return candidate if candidate.is_dir() else None
 
 
 if __name__ == "__main__":
@@ -818,7 +976,19 @@ if __name__ == "__main__":
     parser.add_argument("--model", required=True, help="Path to .pt model")
     parser.add_argument("--data", default="person_dataset/person.yaml", help="Dataset YAML")
     parser.add_argument("--imgsz", type=int, default=1280)
-    parser.add_argument("--pipeline-dir", default=None, help="Large images dir for pipeline eval")
+    parser.add_argument(
+        "--pipeline-dir",
+        default=None,
+        help="Large images dir for pipeline eval. Falls back to "
+             "AUTORESEARCH_PIPELINE_DIR env var, then auto-detects pipeline_val/ at repo root. "
+             "Set AUTORESEARCH_DISABLE_PIPELINE=1 to skip.",
+    )
+    parser.add_argument(
+        "--pipeline-match-iou",
+        type=float,
+        default=PIPELINE_MATCH_IOU_DEFAULT,
+        help="IoU threshold for pipeline-level prediction-to-GT matching (default 0.5).",
+    )
     parser.add_argument(
         "--export-fpfn",
         default=None,
@@ -854,5 +1024,13 @@ if __name__ == "__main__":
     )
     print_metrics(metrics)
 
-    if args.pipeline_dir:
-        evaluate_pipeline(args.model, args.pipeline_dir, args.imgsz)
+    pipeline_dir = resolve_pipeline_dir(args.pipeline_dir)
+    if pipeline_dir is not None:
+        evaluate_pipeline(
+            args.model,
+            str(pipeline_dir),
+            args.imgsz,
+            match_iou=args.pipeline_match_iou,
+        )
+    else:
+        print("evaluate: pipeline eval skipped (no pipeline_val/ found and not configured)")
