@@ -81,6 +81,11 @@ class Orchestrator:
             ollama_url=config.get("ollama_url", "http://localhost:11434"),
         )
 
+        # NOTE: events_logger wired so curator/triage emit to the same
+        # activity_events.jsonl + live terminal stream as the orchestrator
+        # itself. Without it the operator sees a dark window during the
+        # 30-180s LLM calls these agents make.
+        # (The EventLogger is constructed below; we'll patch it in after.)
         self.curator = CuratorAgent(
             state=self.state,
             llm_backend=config.get("llm_backend", "auto"),
@@ -104,6 +109,12 @@ class Orchestrator:
             events_path=config.get("events_path", DEFAULT_EVENTS_PATH),
             also_stdout=config.get("events_to_stdout", True),
         )
+
+        # Curator + Triage need the EventLogger so their LLM call windows
+        # don't leave the operator staring at a dark terminal. Patch it in
+        # post-construction (the agents tolerate a None initial value).
+        self.curator.events = self.events
+        self.triage.events = self.events
 
         self.train_dispatcher = TrainDispatcher(
             state=self.state, events_logger=self.events,
