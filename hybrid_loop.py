@@ -226,10 +226,12 @@ def run_training(exp_num):
         
         threading.Thread(target=watchdog, daemon=True).start()
         
+        # 实时输出 — flush=True 确保 Windows cmd/PowerShell 立刻显示。
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             for line in proc.stdout:
                 f.write(line)
-                print(line.rstrip())
+                f.flush()
+                print(line.rstrip(), flush=True)
         
         proc.wait()
         return proc.returncode == 0

@@ -223,11 +223,13 @@ def run_training(exp_num: int) -> bool:
         
         threading.Thread(target=watchdog, daemon=True).start()
         
-        # 实时输出
+        # 实时输出 — flush=True 确保 Windows cmd/PowerShell 立刻显示，
+        # 不会因为 stdout 缓冲滞后到训练结束才一次性吐出。
         with open(LOG_FILE, "w", encoding="utf-8") as f:
             for line in proc.stdout:
                 f.write(line)
-                print(line.rstrip())
+                f.flush()
+                print(line.rstrip(), flush=True)
         
         proc.wait()
         return proc.returncode == 0

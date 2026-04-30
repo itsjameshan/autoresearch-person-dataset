@@ -23,6 +23,7 @@ autoresearch_runs/
 wandb/
 result/
 run.log
+activity_events.jsonl
 
 # ==================== ONNX data ====================
 *.onnx.data
