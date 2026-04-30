@@ -21,6 +21,8 @@ from datetime import datetime
 from skopt import Optimizer
 from skopt.space import Real, Integer, Categorical
 
+from supervisor_agent import SupervisorAgent
+
 
 # ==============================================
 # 核心配置
@@ -489,12 +491,15 @@ def main():
     
     init_files()
     
+    supervisor = SupervisorAgent()
+    supervisor.load_existing_results()
+    
     optimizer = Optimizer(dimensions=SEARCH_SPACE, base_estimator="GP", random_state=42)
     
-    best_cds = -1.0
-    best_metrics = {}
-    no_improve = 0
-    exp_num = 1
+    best_cds = supervisor.best_cds if supervisor.best_cds > 0 else -1.0
+    best_metrics = supervisor.best_metrics if supervisor.best_metrics else {}
+    no_improve = supervisor.consecutive_no_improve
+    exp_num = supervisor.total_experiments + 1
     
     log(f"📋 总实验: {MAX_EXPERIMENTS}")
     log(f"🧮 贝叶斯阶段: {BAYESIAN_PHASE_EXPS} 次")
@@ -616,6 +621,13 @@ def main():
             status = "DISCARD"
             git_reset()
         
+        supervisor.audit_new_result(metrics, status)
+        
+        safety_issues = supervisor.safety_guard.check_hardware()
+        for level, msg in safety_issues:
+            if level == "CRIT":
+                log(f"🚨 监督告警: {msg}")
+        
         # 记录
         append_result(exp_num, phase, description, metrics, status)
         update_status(exp_num, phase, best_cds, best_metrics, no_improve)
@@ -655,6 +667,8 @@ def main():
     log(f"最佳模型: {BEST_MODEL_DIR}/best.pt")
     log(f"历史: {RESULTS_FILE}")
     log("=" * 60)
+    
+    supervisor.report_generator.generate_report()
 
 
 if __name__ == "__main__":

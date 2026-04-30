@@ -21,6 +21,8 @@ import psutil
 import torch
 from datetime import datetime
 
+from supervisor_agent import SupervisorAgent
+
 
 # ==============================================
 # 核心配置
@@ -501,6 +503,14 @@ def main():
     no_improve = 0
     exp_num = 1
     
+    supervisor = SupervisorAgent()
+    supervisor.load_existing_results()
+    if supervisor.best_cds > 0:
+        best_cds = supervisor.best_cds
+        best_metrics = supervisor.best_metrics
+        no_improve = supervisor.consecutive_no_improve
+        exp_num = supervisor.total_experiments + 1
+    
     log(f"📋 最大实验次数: {MAX_EXPERIMENTS}")
     log(f"🎯 目标 CDS: {TARGET_CDS}")
     log(f"🛑 连续无提升停止: {MAX_NO_IMPROVE}")
@@ -586,6 +596,13 @@ def main():
             status = "DISCARD"
             git_reset()
         
+        supervisor.audit_new_result(metrics, status)
+        
+        safety_issues = supervisor.safety_guard.check_hardware()
+        for level, msg in safety_issues:
+            if level == "CRIT":
+                log(f"🚨 监督告警: {msg}")
+        
         # 9. 记录
         append_result(exp_num, description, metrics, status)
         update_status(exp_num, best_cds, best_metrics, no_improve)
@@ -627,6 +644,8 @@ def main():
     log(f"完整历史: {RESULTS_FILE}")
     log(f"状态概览: {STATUS_FILE}")
     log("=" * 60)
+    
+    supervisor.report_generator.generate_report()
 
 
 if __name__ == "__main__":
