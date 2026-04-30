@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Researcher Decision",
+  "description": "Output contract for the v2 Researcher agent. The orchestrator validates every LLM response against this schema before acting.",
+  "type": "object",
+  "required": ["action_type", "rationale"],
+  "properties": {
+    "action_type": {
+      "type": "string",
+      "enum": [
+        "patch_train_config",
+        "hpo_sweep",
+        "request_pipeline_eval",
+        "request_data_collection",
+        "stop"
+      ],
+      "description": "Top-level decision. patch_train_config maps to the legacy ollama_runner behavior."
+    },
+    "config_patch": {
+      "type": "object",
+      "description": "When action_type=patch_train_config, the variables to change in train.py. Only the 28 allowlisted names are accepted; unknown names cause validation failure.",
+      "additionalProperties": false,
+      "properties": {
+        "MODEL":        {"type": "string", "pattern": "^person_dataset/[A-Za-z0-9_.\\-]+\\.pt$"},
+        "IMGSZ":        {"type": "integer", "minimum": 320, "maximum": 2560},
+        "EPOCHS":       {"type": "integer", "minimum": 1,   "maximum": 1000},
+        "BATCH":        {"type": "integer", "minimum": 1,   "maximum": 64},
+        "PATIENCE":     {"type": "integer", "minimum": 0,   "maximum": 1000},
+        "DEVICE":       {"type": "string"},
+        "LR0":          {"type": "number",  "minimum": 1e-7, "maximum": 1.0},
+        "LRF":          {"type": "number",  "minimum": 1e-7, "maximum": 1.0},
+        "COS_LR":       {"type": "boolean"},
+        "HSV_H":        {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "HSV_S":        {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "HSV_V":        {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "DEGREES":      {"type": "number",  "minimum": 0.0,  "maximum": 180.0},
+        "TRANSLATE":    {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "SCALE":        {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "FLIPUD":       {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "FLIPLR":       {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "MOSAIC":       {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "MIXUP":        {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "COPY_PASTE":   {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "ERASING":      {"type": "number",  "minimum": 0.0,  "maximum": 1.0},
+        "CLOSE_MOSAIC": {"type": "integer", "minimum": 0,   "maximum": 100},
+        "BOX":          {"type": "number",  "minimum": 0.0,  "maximum": 100.0},
+        "CLS":          {"type": "number",  "minimum": 0.0,  "maximum": 100.0},
+        "AMP":          {"type": "boolean"},
+        "CACHE":        {"oneOf": [{"type": "string", "enum": ["ram", "disk", "False"]}, {"type": "boolean"}]},
+        "WORKERS":      {"type": "integer", "minimum": 0,   "maximum": 64},
+        "SINGLE_CLS":   {"type": "boolean"}
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "description": "Human-readable why. Becomes the commit message + experiment description."
+    },
+    "expected_cds_delta": {
+      "type": "number",
+      "description": "Researcher's estimate of CDS improvement. Negative is allowed for exploratory moves."
+    },
+    "estimated_gpu_minutes": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10080
+    },
+    "needs_hitl": {
+      "type": "boolean",
+      "default": false,
+      "description": "True for high-risk / high-cost actions. Orchestrator may also force this if estimated_cost > 30% of remaining budget."
+    }
+  }
+}
