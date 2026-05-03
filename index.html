@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>体育场密集人群检测</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="/static/css/style.css?v=20240520005">
+    <style>
+        .modal-overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5);
+            display: none; align-items:center; justify-content: center; z-index: 9999;
+        }
+        .modal-box {
+            background:white; padding:25px 30px; border-radius:12px; width:420px;
+            box-shadow:0 8px 30px rgba(0,0,0,0.3);
+        }
+        .modal-box h3 { margin-bottom:18px; font-size:16px; }
+        .model-option {
+            padding:12px 15px; background:#f5f7fa; border-radius:8px; margin-bottom:10px;
+            cursor: pointer; font-size:14px;
+        }
+        .model-option:hover { background:#e9edf2; }
+        .folder-input-hide { position:absolute; width:0; height:0; opacity:0; overflow:hidden; }
+        .loading-overlay {
+            position: fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.3);
+            display: none; align-items:center; justify-content:center; z-index:10000;
+            color:white; font-size:18px;
+        }
+
+        .result-table table tbody tr {
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        .result-table table tbody tr:hover {
+            background-color: #f0f0f0;
+        }
+        .result-table table tbody tr.active {
+            background-color: #e3f2fd;
+        }
+
+        @keyframes pulse {
+            0% { stroke-width: 3; opacity: 1; }
+            50% { stroke-width: 5; opacity: 0.7; }
+            100% { stroke-width: 3; opacity: 1; }
+        }
+
+        .folder-progress-bar {
+            height: 10px; background: #eee; border-radius: 5px; margin: 12px 0;
+            overflow: hidden; display: none;
+        }
+        .folder-progress {
+            height: 100%; background: #0096ff; width: 0%; transition: width 0.2s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>体育场人群检测</h2>
+            </div>
+            <button class="sidebar-btn active" id="btn-img">
+                <span class="icon">🖼️</span>图片选择
+            </button>
+            <button class="sidebar-btn" id="btn-folder">
+                <span class="icon">📁</span>文件夹选择
+            </button>
+            <button class="sidebar-btn" id="btn-model">
+                <span class="icon">🚌</span>模型选择
+            </button>
+            <button class="sidebar-btn" id="btn-save">
+                <span class="icon">💾</span>结果保存
+            </button>
+        </aside>
+
+        <section class="image-view">
+            <div class="top-bar">
+                <div class="param-bar">
+                    <div class="param-item">
+                        <label>置信度 (Conf): <span id="conf-value">0.5</span></label>
+                        <input type="range" id="conf-slider" min="0" max="1" step="0.01" value="0.5">
+                    </div>
+                    <div class="param-item">
+                        <label>交并比 (IoU): <span id="iou-value">0.5</span></label>
+                        <input type="range" id="iou-slider" min="0" max="1" step="0.01" value="0.5">
+                    </div>
+                </div>
+                <div class="status-bar">
+                    <div class="status-item">
+                        <span class="icon">⏱️</span>检测耗时: <span id="time-cost">0.00s</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="icon">🎯</span>检测目标: <span id="target-count">0个</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="folder-progress-bar" id="folderProgressBar">
+                <div class="folder-progress" id="folderProgress"></div>
+            </div>
+
+            <div class="image-container" id="img-container">
+                <img id="detect-img" src="" alt="请选择图片/文件夹进行检测">
+                <canvas id="canvas-overlay"></canvas>
+                <div class="empty-tip" id="empty-tip">请选择图片/文件夹进行检测</div>
+            </div>
+        </section>
+
+        <section class="right-panel">
+            <div class="result-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>序号</th><th>图片名称</th><th>类别</th><th>置信度</th><th>坐标位置</th>
+                        </tr>
+                    </thead>
+                    <tbody id="result-tbody"></tbody>
+                </table>
+            </div>
+
+            <aside class="info-panel">
+                <div class="info-card stats-card">
+                    <h4>📊 类别统计</h4>
+                    <div class="stats-content" id="stats-content"></div>
+                </div>
+
+                <div class="info-card conf-card">
+                    <h4>🔍 置信度:</h4>
+                    <input type="text" id="conf-input" value="" readonly>
+                </div>
+                <div class="info-card coord-card">
+                    <h4>📍 坐标位置:</h4>
+                    <div class="coord-inputs">
+                        <div class="coord-row"><label>X₁</label><input type="text" id="coord-x1" readonly><label>Y₁</label><input type="text" id="coord-y1" readonly></div>
+                        <div class="coord-row"><label>X₂</label><input type="text" id="coord-x2" readonly><label>Y₂</label><input type="text" id="coord-y2" readonly></div>
+                    </div>
+                </div>
+
+                <button id="start-detect" class="start-detect-btn">开始检测</button>
+            </aside>
+        </section>
+    </div>
+
+    <input type="file" id="img-selector" class="folder-input-hide" accept="image/jpeg,image/png,image/jpg,image/bmp">
+    <input type="file" id="folder-selector" class="folder-input-hide" webkitdirectory directory multiple>
+
+    <div class="modal-overlay" id="modelModal">
+        <div class="modal-box"><h3>选择检测模型</h3><div id="model-list"></div></div>
+    </div>
+    <div class="loading-overlay" id="loadingOverlay"><div>检测中，请稍候...</div></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            const confSlider = document.getElementById('conf-slider');
+            const iouSlider = document.getElementById('iou-slider');
+            const targetCountEl = document.getElementById('target-count');
+            const tbody = document.getElementById('result-tbody');
+            const confInput = document.getElementById('conf-input');
+            const coordX1 = document.getElementById('coord-x1'), coordY1 = document.getElementById('coord-y1');
+            const coordX2 = document.getElementById('coord-x2'), coordY2 = document.getElementById('coord-y2');
+            const folderSelector = document.getElementById('folder-selector');
+            const imgSelector = document.getElementById('img-selector');
+            const detectImg = document.getElementById('detect-img');
+            const emptyTip = document.getElementById('empty-tip');
+            const startDetectBtn = document.getElementById('start-detect');
+            const btnImg = document.getElementById('btn-img'), btnFolder = document.getElementById('btn-folder');
+            const btnModel = document.getElementById('btn-model'), btnSave = document.getElementById('btn-save');
+            const canvas = document.getElementById('canvas-overlay');
+            const ctx = canvas.getContext('2d');
+            const folderProgressBar = document.getElementById('folderProgressBar');
+            const folderProgress = document.getElementById('folderProgress');
+
+            let currentImageFile = null;
+            let selectedFolderPath = null;
+            let currentPersons = [];
+            let selectedIndex = -1;
+            let imageFileName = "";
+            let folderResults = [];
+
+            function resizeCanvas() {
+                if (!detectImg.src) return;
+                setTimeout(() => {
+                    canvas.width = detectImg.offsetWidth;
+                    canvas.height = detectImg.offsetHeight;
+                    drawBoxes();
+                }, 100);
+            }
+
+            function drawBoxes() {
+                if (!currentPersons.length) return;
+                ctx.clearRect(0,0,canvas.width,canvas.height);
+                const s = Math.min(canvas.width/detectImg.naturalWidth, canvas.height/detectImg.naturalHeight);
+                currentPersons.forEach((p,i)=>{
+                    if(i!==selectedIndex){ctx.strokeStyle='#0f0';ctx.lineWidth=2;ctx.strokeRect(p.x1*s,p.y1*s,(p.x2-p.x1)*s,(p.y2-p.y1)*s);}
+                });
+                if(selectedIndex>=0){
+                    const p=currentPersons[selectedIndex];
+                    ctx.strokeStyle='#f00';ctx.lineWidth=4;ctx.strokeRect(p.x1*s,p.y1*s,(p.x2-p.x1)*s,(p.y2-p.y1)*s);
+                }
+            }
+
+            function resetInfoPanel() {
+                confInput.value='';coordX1.value=0;coordY1.value=0;coordX2.value=0;coordY2.value=0;selectedIndex=-1;drawBoxes();
+            }
+
+            function clearResults() {
+                tbody.innerHTML='';targetCountEl.textContent='0个';document.getElementById('time-cost').textContent='0.00s';
+                currentPersons=[];window.allPersons=[];resetInfoPanel();ctx.clearRect(0,0,canvas.width,canvas.height);
+            }
+
+            btnImg.addEventListener('click',()=>{imgSelector.value='';imgSelector.click();});
+            imgSelector.addEventListener('change',(e)=>{
+                const f=e.target.files[0];if(!f)return;currentImageFile=f;imageFileName=f.name;
+                detectImg.src=URL.createObjectURL(f);detectImg.style.visibility='visible';emptyTip.style.display='none';resizeCanvas();clearResults();
+            });
+
+            startDetectBtn.addEventListener('click',async()=>{
+                if(!currentImageFile){alert('请先选择图片！');return;}
+                loadingOverlay.style.display='flex';
+                const fd=new FormData();fd.append('image',currentImageFile);fd.append('conf',confSlider.value);fd.append('iou',iouSlider.value);
+                try{
+                    const r=await fetch('/detect_single',{method:'POST',body:fd});
+                    const d=await r.json();if(d.error){alert(d.error);loadingOverlay.style.display='none';return;}
+                    detectImg.src=d.image_data;targetCountEl.textContent=d.count+'个';document.getElementById('time-cost').textContent=d.infer_time+'s';
+                    currentPersons=d.persons||[];window.allPersons=d.persons;tbody.innerHTML='';
+                    currentPersons.forEach((p,i)=>{
+                        const tr=document.createElement('tr');
+                        tr.innerHTML=`<td>${i+1}</td><td>${imageFileName}</td><td>person</td><td>${p.conf.toFixed(2)}</td><td>${p.x1},${p.y1},${p.x2},${p.y2}</td>`;
+                        tr.onclick=()=>{document.querySelectorAll('tbody tr').forEach(x=>x.classList.remove('active'));tr.classList.add('active');selectedIndex=i;confInput.value=p.conf.toFixed(3);coordX1.value=p.x1;coordY1.value=p.y1;coordX2.value=p.x2;coordY2.value=p.y2;drawBoxes();};
+                        tbody.appendChild(tr);
+                    });
+                    document.getElementById('stats-content').innerHTML=`<p>检测到 ${d.count} 个人</p>`;resizeCanvas();
+                }catch(e){alert('异常');}finally{loadingOverlay.style.display='none';}
+            });
+
+            btnFolder.addEventListener('click',()=>{folderSelector.value='';folderSelector.click();});
+            folderSelector.addEventListener('change',async(e)=>{
+                const fs=e.target.files;if(!fs.length)return;
+                if(!confirm(`检测${fs.length}张？`))return;
+                loadingOverlay.style.display='flex';folderProgressBar.style.display='block';folderProgress.style.width='0%';
+                try{
+                    const r=await fetch('/detect_folder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder_path:fs[0].webkitRelativePath.split('/')[0],conf:+confSlider.value,iou:+iouSlider.value})});
+                    const d=await r.json();loadingOverlay.style.display='none';folderProgressBar.style.display='none';
+                    if(d.error){alert(d.error);return;}
+                    folderResults=d.results;targetCountEl.textContent=d.total_count+'个';tbody.innerHTML='';
+                    d.results.forEach((it,i)=>{
+                        const tr=document.createElement('tr');
+                        tr.innerHTML=`<td>${i+1}</td><td>${it.name}</td><td>person</td><td>-</td><td>总数：${it.count}</td>`;
+                        tr.onclick=()=>{document.querySelectorAll('tr').forEach(x=>x.classList.remove('active'));tr.classList.add('active');detectImg.src=it.image_data;currentPersons=it.persons;window.allPersons=it.persons;detectImg.style.visibility='visible';emptyTip.style.display='none';resizeCanvas();};
+                        tbody.appendChild(tr);
+                    });
+                    alert(`完成！共${d.total}张 ${d.total_count}人`);
+                }catch(e){alert('失败');loadingOverlay.style.display='none';folderProgressBar.style.display='none';}
+            });
+
+            btnSave.addEventListener('click',async()=>{
+                const ps=window.allPersons||[];if(!ps.length){alert('无结果');return;}
+                loadingOverlay.style.display='flex';
+                try{
+                    const r=await fetch('/save_results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({persons:ps,image_base64:detectImg.src})});
+                    const d=await r.json();alert(d.success?'✅保存成功':'❌失败');
+                }catch(e){alert('异常');}finally{loadingOverlay.style.display='none';}
+            });
+
+            btnModel.onclick=async()=>{
+                const r=await fetch('/get_models');const d=await r.json();modelList.innerHTML='';
+                d.models?.forEach(m=>{const div=document.createElement('div');div.className='model-option';div.textContent=m.name;div.onclick=async()=>{await fetch('/switch_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_name:m.name})});alert('切换成功');modelModal.style.display='none';};modelList.appendChild(div);});
+                modelModal.style.display='flex';
+            };
+            modelModal.onclick=e=>{if(e.target===modelModal)modelModal.style.display='none';};
+
+            document.getElementById('conf-value').textContent=confSlider.value;
+            document.getElementById('iou-value').textContent=iouSlider.value;
+            confSlider.oninput=()=>document.getElementById('conf-value').textContent=confSlider.value;
+            iouSlider.oninput=()=>document.getElementById('iou-value').textContent=iouSlider.value;
+            detectImg.onload=resizeCanvas;window.onresize=resizeCanvas;
+        });
+    </script>
+</body>
+</html>

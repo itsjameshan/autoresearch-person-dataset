@@ -77,10 +77,15 @@ echo ========================================
 echo    研究循环已启动！
 echo ========================================
 echo.
-echo 监控命令:
+echo 监控命令 (本终端显示训练实时输出 + agent 决策):
 echo   - 状态概览: type status.md
 echo   - 完整历史: type results.tsv
-echo   - 训练日志: type run.log
+echo   - 训练日志: type run.log              ^(纯训练 stdout^)
+echo   - 活动事件: type activity_events.jsonl ^(orchestrator 决策事件流^)
+echo.
+echo   另开终端实时跟踪:
+echo     PowerShell:  Get-Content run.log -Wait -Tail 30
+echo     PowerShell:  Get-Content activity_events.jsonl -Wait -Tail 30
 echo.
 echo 按 Ctrl+C 停止研究循环
 echo.

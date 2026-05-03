@@ -33,6 +33,7 @@ from autoresearch_v2.agents.curator import CuratorAgent
 from autoresearch_v2.agents.triage import TriageAgent
 from autoresearch_v2.tools.train_dispatcher import TrainDispatcher, TrainingFailed
 from autoresearch_v2.tools.eval_dispatcher import EvalDispatcher
+from autoresearch_v2.events import EventLogger, DEFAULT_EVENTS_PATH
 
 
 TARGET_CDS = 0.85
@@ -80,6 +81,11 @@ class Orchestrator:
             ollama_url=config.get("ollama_url", "http://localhost:11434"),
         )
 
+        # NOTE: events_logger wired so curator/triage emit to the same
+        # activity_events.jsonl + live terminal stream as the orchestrator
+        # itself. Without it the operator sees a dark window during the
+        # 30-180s LLM calls these agents make.
+        # (The EventLogger is constructed below; we'll patch it in after.)
         self.curator = CuratorAgent(
             state=self.state,
             llm_backend=config.get("llm_backend", "auto"),
@@ -96,9 +102,26 @@ class Orchestrator:
             ollama_url=config.get("ollama_url", "http://localhost:11434"),
         )
 
-        self.train_dispatcher = TrainDispatcher(state=self.state)
+        # Activity events stream — printed live to terminal + appended to JSONL.
+        # The Windows GPU operator can monitor a single window; tools can tail
+        # activity_events.jsonl for structured replay.
+        self.events = EventLogger(
+            events_path=config.get("events_path", DEFAULT_EVENTS_PATH),
+            also_stdout=config.get("events_to_stdout", True),
+        )
+
+        # Curator + Triage need the EventLogger so their LLM call windows
+        # don't leave the operator staring at a dark terminal. Patch it in
+        # post-construction (the agents tolerate a None initial value).
+        self.curator.events = self.events
+        self.triage.events = self.events
+
+        self.train_dispatcher = TrainDispatcher(
+            state=self.state, events_logger=self.events,
+        )
         self.eval_dispatcher = EvalDispatcher(
             state=self.state,
+            events_logger=self.events,
             data_yaml=config.get("data_yaml", DEFAULT_DATA_YAML),
             imgsz=config.get("imgsz", 1280),
         )
@@ -179,19 +202,40 @@ class Orchestrator:
         log(f"最大迭代: {self.max_iterations}")
         log(f"连续失败上限: {self.max_consecutive_fails}")
 
+        self.events.emit(
+            "session_start",
+            target_cds=self.target_cds,
+            max_iters=self.max_iterations,
+            max_consecutive_fails=self.max_consecutive_fails,
+        )
+
         if self.budget.default_gpu_limit > 0 or self.budget.default_dollar_limit > 0:
             self.hitl.start_flask_server()
 
+        final_status = "max_iterations"
         while self.iteration < self.max_iterations:
             self.iteration += 1
             run_id = self._generate_run_id()
+            iter_start = time.time()
 
             log(f"\n{'='*60}")
             log(f"  迭代 {self.iteration}/{self.max_iterations} | run_id={run_id}")
             log(f"{'='*60}")
 
+            best_metrics_for_event = self.state.get_best_metrics() or {}
+            self.events.emit(
+                "iteration_start",
+                iteration=self.iteration,
+                max_iters=self.max_iterations,
+                run_id=run_id,
+                best_cds=best_metrics_for_event.get("cds", 0.0),
+                consecutive_fails=self.consecutive_fails,
+            )
+
             if self._check_stop_signal():
                 log("收到人工停止信号", "WARN")
+                self.events.emit("halt", reason="manual stop signal")
+                final_status = "manual_stop"
                 break
 
             snapshot = self.state.get_recent_experiments(n=10)
@@ -218,6 +262,18 @@ class Orchestrator:
             log(f"Researcher决策: action={decision.get('action_type')}", "AGENT")
             log(f"  rationale: {decision.get('rationale', '')}", "AGENT")
 
+            self.events.emit(
+                "decision",
+                agent="researcher",
+                action_type=decision.get("action_type"),
+                rationale=decision.get("rationale", ""),
+                config_patch=decision.get("config_diff") or {},
+                expected_metric_delta=decision.get("expected_metric_delta") or {},
+                estimated_gpu_minutes=decision.get("estimated_gpu_minutes"),
+                estimated_cost_usd=decision.get("estimated_cost_usd"),
+                needs_hitl=bool(decision.get("needs_hitl", False)),
+            )
+
             self.state.log_decision(
                 run_id=run_id,
                 made_by_agent="researcher",
@@ -231,6 +287,8 @@ class Orchestrator:
 
             if decision.get("action_type") == "stop":
                 log("Researcher决定停止迭代", "OK")
+                self.events.emit("halt", reason="researcher requested stop")
+                final_status = "researcher_stop"
                 break
 
             if decision.get("needs_hitl", False):
@@ -243,7 +301,18 @@ class Orchestrator:
                     ),
                 )
                 log(f"需要人工审批 (gate_id={gate_id})，等待中...", "WARN")
+                self.events.emit(
+                    "hitl_request",
+                    gate_id=gate_id,
+                    run_id=run_id,
+                    reason=f"action={decision.get('action_type')}",
+                )
                 approved = self.hitl.wait_for_decision(gate_id, timeout=86400)
+                self.events.emit(
+                    "hitl_decision",
+                    gate_id=gate_id,
+                    decision="approved" if approved else "denied",
+                )
                 if not approved:
                     log("人工审批被拒绝，跳过本次迭代", "WARN")
                     continue
@@ -257,7 +326,83 @@ class Orchestrator:
                 )
             except BudgetExceeded as e:
                 log(f"预算不足: {e}", "CRIT")
+                self.events.emit("halt", reason=f"budget exceeded: {e}")
+                final_status = "budget_exceeded"
                 break
+
+            # ── P5: hpo_sweep dispatch ──────────────────────────────────
+            # When the Researcher requests an HPO sweep, hand off to
+            # OptunaRunner. Each trial trains via train_dispatcher (so
+            # live output + events stream the same as a normal exp), and
+            # each completed trial inserts its own row in state.db with
+            # agent_made_decision='optuna'. After the sweep completes,
+            # the best-trial metrics are already recorded — skip the
+            # orchestrator's per-iteration eval/train block.
+            if decision.get("action_type") == "hpo_sweep":
+                try:
+                    from autoresearch_v2.tools.optuna_runner import (
+                        OptunaRunner, OPTUNA_AVAILABLE,
+                    )
+                    if not OPTUNA_AVAILABLE:
+                        log("optuna 未安装，跳过 hpo_sweep。pip install optuna", "WARN")
+                        self.budget.release_reserved(run_id)
+                        continue
+
+                    n_trials = int(decision.get("n_trials", 10))
+                    search_space = decision.get("search_space") or None
+                    sweep = OptunaRunner(
+                        search_space=search_space,
+                        n_trials=n_trials,
+                        events_logger=self.events,
+                        state=self.state,
+                        budget=self.budget,
+                        budget_period="default",
+                    )
+                    log(f"启动 Optuna 扫描 ({n_trials} trials)", "AGENT")
+                    result = sweep.run()
+                    log(
+                        f"Optuna 完成: best_cds={result.best_cds:.4f} "
+                        f"trial={result.best_trial_number} "
+                        f"completed={result.n_completed}/{result.n_trials}",
+                        "OK",
+                    )
+                    # Reserved budget already consumed inside OptunaRunner per
+                    # trial via budget.commit_actual; release the umbrella
+                    # reservation we made for the meta-action.
+                    try:
+                        self.budget.release_reserved(run_id)
+                    except Exception:
+                        pass
+                    # Apply the winning params back to train.py so the next
+                    # Researcher iteration starts from the new best baseline.
+                    if result.best_params:
+                        from autoresearch_v2.tools.train_dispatcher import apply_config_diff
+                        apply_config_diff(result.best_params)
+                    self.events.emit(
+                        "iteration_end",
+                        iteration=self.iteration,
+                        run_id=run_id,
+                        status="hpo_complete",
+                        duration_sec=round(time.time() - iter_start, 1),
+                        cds=result.best_cds,
+                    )
+                    time.sleep(self.cooldown_sec)
+                    continue
+                except Exception as e:
+                    log(f"Optuna 扫描失败: {e}", "CRIT")
+                    self.events.emit("crash", run_id=run_id,
+                                     reason=f"hpo_sweep: {e}")
+                    self.budget.release_reserved(run_id)
+                    self.consecutive_fails += 1
+                    if self.consecutive_fails >= self.max_consecutive_fails:
+                        self.events.emit(
+                            "halt",
+                            reason=f"{self.max_consecutive_fails} consecutive failures",
+                        )
+                        final_status = "max_consecutive_fails"
+                        break
+                    time.sleep(self.cooldown_sec)
+                    continue
 
             try:
                 best_pt = self.train_dispatcher.dispatch(run_id, decision)
@@ -267,6 +412,13 @@ class Orchestrator:
             except TrainingFailed as e:
                 self.consecutive_fails += 1
                 log(f"训练失败 (连续{self.consecutive_fails}次): {e}", "CRIT")
+
+                self.events.emit(
+                    "crash",
+                    run_id=run_id,
+                    consecutive_fails=self.consecutive_fails,
+                    reason=str(e)[:200],
+                )
 
                 diagnosis = self._handle_triage(
                     error_info={"run_id": run_id, "error": str(e)},
@@ -278,6 +430,11 @@ class Orchestrator:
 
                 if self.consecutive_fails >= self.max_consecutive_fails:
                     log(f"连续{self.max_consecutive_fails}次失败，停止迭代", "CRIT")
+                    self.events.emit(
+                        "halt",
+                        reason=f"{self.max_consecutive_fails} consecutive failures",
+                    )
+                    final_status = "max_consecutive_fails"
                     break
 
                 time.sleep(self.cooldown_sec)
@@ -301,11 +458,31 @@ class Orchestrator:
             log(f"评估结果: CDS={cds:.4f} | mAP50={metrics.get('mAP50',0):.4f} "
                 f"| P={metrics.get('precision',0):.4f} | R={metrics.get('recall',0):.4f}")
 
+            self.events.emit("eval_complete", run_id=run_id, metrics=metrics)
+
             gates_pass, gates_msg = self._check_quality_gates(metrics)
             log(f"Quality Gates: {gates_msg}")
 
+            self.events.emit(
+                "iteration_end",
+                iteration=self.iteration,
+                run_id=run_id,
+                status="complete",
+                duration_sec=round(time.time() - iter_start, 1),
+                cds=cds,
+                gates_pass=gates_pass,
+            )
+
             if cds >= self.target_cds and gates_pass:
                 log(f"🎉 目标达成！CDS={cds:.4f} >= {self.target_cds}", "OK")
+                self.events.emit(
+                    "target_met",
+                    run_id=run_id,
+                    cds=cds,
+                    precision=metrics.get("precision"),
+                    recall=metrics.get("recall"),
+                )
+                final_status = "target_met"
                 break
 
             if self._check_stagnation():
@@ -330,6 +507,15 @@ class Orchestrator:
 
             time.sleep(self.cooldown_sec)
 
+        best = self.state.get_best_metrics() or {}
+        self.events.emit(
+            "session_end",
+            status=final_status,
+            iterations=self.iteration,
+            best_cds=best.get("cds", 0.0),
+            best_precision=best.get("precision", 0.0),
+            best_recall=best.get("recall", 0.0),
+        )
         self._print_summary()
 
     def _print_summary(self):
