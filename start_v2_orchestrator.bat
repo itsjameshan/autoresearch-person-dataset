@@ -71,6 +71,10 @@ echo Press Ctrl+C to stop.
 echo ========================================
 echo.
 
+REM Force UTF-8 console output to avoid UnicodeEncodeError on Windows GBK terminals.
+set "PYTHONIOENCODING=utf-8"
+set "PYTHONUTF8=1"
+
 REM -u flushes Python stdout per line, matching f.flush()/print(flush=True)
 REM in the Python source. This is what makes Windows cmd show live output.
 python -u -m autoresearch_v2.orchestrator %*
