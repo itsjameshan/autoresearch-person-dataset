@@ -157,7 +157,10 @@ def run_training(train_script: str = TRAIN_SCRIPT,
             if not quiet:
                 # Live to terminal — flushed every line so Windows
                 # operators see real-time progress in their cmd/PowerShell.
-                print(line.rstrip(), flush=True)
+                try:
+                    print(line.rstrip(), flush=True)
+                except UnicodeEncodeError:
+                    print(line.rstrip().encode('ascii', errors='replace').decode('ascii'), flush=True)
             if events_logger is not None and interesting_re.search(line):
                 try:
                     events_logger.emit("train_progress", line=line.rstrip())

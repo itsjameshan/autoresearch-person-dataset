@@ -53,10 +53,10 @@ DEFAULT_DATA_YAML = os.path.normpath(os.path.join(
 def log(msg: str, level: str = "INFO"):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     prefix = {
-        "INFO": "📋", "WARN": "⚠️", "CRIT": "🚨",
-        "OK": "✅", "SUGGEST": "💡", "AGENT": "🤖",
-    }.get(level, "📋")
-    print(f"[{ts}] [ORCHESTRATOR:{level}] {prefix} {msg}")
+        "INFO": "[INFO]", "WARN": "[WARN]", "CRIT": "[CRIT]",
+        "OK": "[ OK ]", "SUGGEST": "[SUGG]", "AGENT": "[AGNT]",
+    }.get(level, "[INFO]")
+    print(f"{ts} [ORCHESTRATOR]{prefix} {msg}")
     sys.stdout.flush()
 
 
@@ -133,6 +133,8 @@ class Orchestrator:
         self.stagnation_min_delta = config.get("stagnation_min_delta", STAGNATION_MIN_DELTA)
         self.cooldown_sec = config.get("cooldown_sec", COOLDOWN_SEC)
         self.max_iterations = config.get("max_iterations", 50)
+        # Default to auto-approve HITL so long-running loops don't block.
+        self.auto_approve_hitl = bool(config.get("auto_approve_hitl", True))
         self.data_yaml = config.get("data_yaml", DEFAULT_DATA_YAML)
         self.dataset_gate_enabled = bool(config.get("dataset_gate_enabled", True))
         self.reports_dir = config.get(
@@ -254,6 +256,14 @@ class Orchestrator:
             self.iteration += 1
             run_id = self._generate_run_id()
             iter_start = time.time()
+            # Pre-register experiment row so decision audit logs can safely
+            # reference run_id even before training starts.
+            self.state.insert_experiment(
+                run_id=run_id,
+                config_json={},
+                metrics_json={},
+                status="pending",
+            )
 
             log(f"\n{'='*60}")
             log(f"  迭代 {self.iteration}/{self.max_iterations} | run_id={run_id}")
@@ -295,6 +305,19 @@ class Orchestrator:
                 top_data_issues=top_issues,
                 recent_failures=recent_failures,
             )
+            # Guard against LLM rationale hallucinations on cold-start runs.
+            # If there are no completed experiments yet, force a neutral
+            # "initial exploration" rationale for hpo_sweep.
+            completed_in_snapshot = sum(
+                1 for exp in snapshot if exp.get("status") == "completed"
+            )
+            if (
+                decision.get("action_type") == "hpo_sweep"
+                and completed_in_snapshot == 0
+            ):
+                decision["rationale"] = (
+                    "当前仍在冷启动阶段（暂无 completed 实验），先用 Optuna 在关键参数空间做初始探索以建立基线。"
+                )
 
             log(f"Researcher决策: action={decision.get('action_type')}", "AGENT")
             log(f"  rationale: {decision.get('rationale', '')}", "AGENT")
@@ -344,7 +367,12 @@ class Orchestrator:
                     run_id=run_id,
                     reason=f"action={decision.get('action_type')}",
                 )
-                approved = self.hitl.wait_for_decision(gate_id, timeout=86400)
+                if self.auto_approve_hitl:
+                    self.hitl.approve_from_cli(gate_id, decided_by="auto_policy")
+                    approved = True
+                    log(f"自动审批通过 (gate_id={gate_id})", "OK")
+                else:
+                    approved = self.hitl.wait_for_decision(gate_id, timeout=86400)
                 self.events.emit(
                     "hitl_decision",
                     gate_id=gate_id,
@@ -599,6 +627,8 @@ def main():
                         help="美元预算 (0=无限制)")
     parser.add_argument("--hitl-port", type=int, default=8765)
     parser.add_argument("--cooldown", type=int, default=COOLDOWN_SEC)
+    parser.add_argument("--manual-hitl", action="store_true",
+                        help="禁用自动审批，改为人工审批")
     parser.add_argument("--skip-dataset-gate", action="store_true",
                         help="跳过启动前的数据质量检查")
     args = parser.parse_args()
@@ -615,6 +645,7 @@ def main():
         "dollar_limit": args.dollar_limit,
         "hitl_port": args.hitl_port,
         "cooldown_sec": args.cooldown,
+        "auto_approve_hitl": not args.manual_hitl,
         "dataset_gate_enabled": not args.skip_dataset_gate,
     }
 

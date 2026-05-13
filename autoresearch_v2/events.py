@@ -37,10 +37,10 @@ DEFAULT_EVENTS_PATH = "activity_events.jsonl"
 # ── Pretty-printer per event type ─────────────────────────────────────
 
 _LEVEL_ICONS = {
-    "INFO": "📋", "WARN": "⚠️", "CRIT": "🚨",
-    "OK": "✅", "FAIL": "❌", "AGENT": "🤖",
-    "TRAIN": "🏋️ ", "EVAL": "🔍", "DECIDE": "🎯",
-    "BUDGET": "💰", "HITL": "🙋", "EVENT": "▸",
+    "INFO": "[INFO]", "WARN": "[WARN]", "CRIT": "[CRIT]",
+    "OK": "[ OK ]", "FAIL": "[FAIL]", "AGENT": "[AGNT]",
+    "TRAIN": "[TRN]", "EVAL": "[EVAL]", "DECIDE": "[DEC]",
+    "BUDGET": "[BDGT]", "HITL": "[HITL]", "EVENT": "[EVNT]",
 }
 
 
