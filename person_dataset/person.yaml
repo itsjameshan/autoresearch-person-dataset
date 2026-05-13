@@ -1,9 +1,9 @@
-# 数据根目录由 Ultralytics 自动设为「本文件所在目录」（即 person_dataset/）。
-# 勿写 path: . — 否则会按当前工作目录解析，错成 autoresearch_new/images/...
-# 大文件见仓库根 .gitignore，勿 commit。
-train: ../images/train
-val: ../images/val
-test: ../images/test
+# 真实数据目录固定在仓库内 person_dataset/ 下。
+# 与 README 一致：images/labels 不走仓库外部路径。
+path: .
+train: images/train
+val: images/val
+test: images/test
 nc: 1
 names:
   0: person

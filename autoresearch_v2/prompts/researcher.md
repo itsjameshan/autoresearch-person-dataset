@@ -79,6 +79,7 @@
 对于 `config_diff`（`patch_train_config`）：值为具体数值。
 对于 `search_space`（`hpo_sweep`）：值为 `{type, low, high}` 或 `{type, choices}`；不写则用默认（11 个常调维度）。
 对于 `n_trials`（`hpo_sweep`）：默认 10。每个 trial = 一次完整训练，**总成本 = n_trials × 单次训练成本**。
+无论什么 `action_type`，都请返回 `"config_diff": {}` 字段；`hpo_sweep` 没有单点配置修改时保持空对象。
 
 对于 `needs_hitl`：
 - 如果 estimated_cost > 剩余预算的 30%，**必须**设为 true

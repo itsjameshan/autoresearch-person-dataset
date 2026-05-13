@@ -34,6 +34,7 @@ from autoresearch_v2.agents.triage import TriageAgent
 from autoresearch_v2.tools.train_dispatcher import TrainDispatcher, TrainingFailed
 from autoresearch_v2.tools.eval_dispatcher import EvalDispatcher
 from autoresearch_v2.events import EventLogger, DEFAULT_EVENTS_PATH
+from autoresearch_v2.dataset_inspector import inspect_dataset
 
 
 TARGET_CDS = 0.85
@@ -132,6 +133,12 @@ class Orchestrator:
         self.stagnation_min_delta = config.get("stagnation_min_delta", STAGNATION_MIN_DELTA)
         self.cooldown_sec = config.get("cooldown_sec", COOLDOWN_SEC)
         self.max_iterations = config.get("max_iterations", 50)
+        self.data_yaml = config.get("data_yaml", DEFAULT_DATA_YAML)
+        self.dataset_gate_enabled = bool(config.get("dataset_gate_enabled", True))
+        self.reports_dir = config.get(
+            "reports_dir",
+            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")),
+        )
 
         self.consecutive_fails = 0
         self.iteration = 0
@@ -208,6 +215,36 @@ class Orchestrator:
             max_iters=self.max_iterations,
             max_consecutive_fails=self.max_consecutive_fails,
         )
+
+        if self.dataset_gate_enabled:
+            log("执行 Dataset Inspector 预检查...", "INFO")
+            dataset_report = inspect_dataset(self.data_yaml, reports_dir=self.reports_dir)
+            self.events.emit(
+                "dataset_inspection",
+                blocking=bool(dataset_report.get("blocking")),
+                severe_issues=dataset_report.get("severe_issues", []),
+                warnings=dataset_report.get("warnings", []),
+                report_json=dataset_report.get("report_json", ""),
+                report_md=dataset_report.get("report_md", ""),
+            )
+            if dataset_report.get("blocking", False):
+                severe = dataset_report.get("severe_issues", [])
+                first_issue = severe[0] if severe else "dataset inspection failed"
+                log(f"Dataset Gate 拦截: {first_issue}", "CRIT")
+                final_status = "dataset_blocked"
+                self.events.emit("halt", reason=f"dataset gate blocked: {first_issue}")
+                best = self.state.get_best_metrics() or {}
+                self.events.emit(
+                    "session_end",
+                    status=final_status,
+                    iterations=self.iteration,
+                    best_cds=best.get("cds", 0.0),
+                    best_precision=best.get("precision", 0.0),
+                    best_recall=best.get("recall", 0.0),
+                )
+                self._print_summary()
+                return
+            log("Dataset Gate 通过", "OK")
 
         if self.budget.default_gpu_limit > 0 or self.budget.default_dollar_limit > 0:
             self.hitl.start_flask_server()
@@ -562,6 +599,8 @@ def main():
                         help="美元预算 (0=无限制)")
     parser.add_argument("--hitl-port", type=int, default=8765)
     parser.add_argument("--cooldown", type=int, default=COOLDOWN_SEC)
+    parser.add_argument("--skip-dataset-gate", action="store_true",
+                        help="跳过启动前的数据质量检查")
     args = parser.parse_args()
 
     config = {
@@ -576,6 +615,7 @@ def main():
         "dollar_limit": args.dollar_limit,
         "hitl_port": args.hitl_port,
         "cooldown_sec": args.cooldown,
+        "dataset_gate_enabled": not args.skip_dataset_gate,
     }
 
     if args.config:

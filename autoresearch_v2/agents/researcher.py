@@ -175,6 +175,49 @@ def _validate_decision(decision: dict) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def _normalize_decision(decision: dict) -> dict:
+    """
+    Normalize model output into the orchestrator-compatible decision shape.
+    This keeps the loop running even when the LLM omits optional fields.
+    """
+    if not isinstance(decision, dict):
+        return {}
+
+    normalized = dict(decision)
+    action = str(normalized.get("action_type", "")).strip()
+
+    # Backward-compatible alias used by older prompts/examples.
+    if action == "patch_train_config":
+        normalized["action_type"] = "patch_train_config"
+
+    # Keep schema-required numeric/bool fields safe by default.
+    normalized.setdefault("config_diff", {})
+    if not isinstance(normalized.get("config_diff"), dict):
+        normalized["config_diff"] = {}
+
+    normalized.setdefault("expected_metric_delta", {})
+    if not isinstance(normalized.get("expected_metric_delta"), dict):
+        normalized["expected_metric_delta"] = {}
+
+    try:
+        normalized["estimated_gpu_minutes"] = float(
+            normalized.get("estimated_gpu_minutes", 0) or 0
+        )
+    except (TypeError, ValueError):
+        normalized["estimated_gpu_minutes"] = 0.0
+
+    try:
+        normalized["estimated_cost_usd"] = float(
+            normalized.get("estimated_cost_usd", 0) or 0
+        )
+    except (TypeError, ValueError):
+        normalized["estimated_cost_usd"] = 0.0
+
+    normalized["needs_hitl"] = bool(normalized.get("needs_hitl", False))
+    normalized.setdefault("rationale", "")
+    return normalized
+
+
 class ResearcherAgent:
     def __init__(self, llm_backend: str = "auto",
                  anthropic_model: str = "claude-sonnet-4-20250514",
@@ -236,6 +279,7 @@ class ResearcherAgent:
                       file=sys.stderr)
                 continue
 
+            decision = _normalize_decision(decision)
             valid, errors = _validate_decision(decision)
             if valid:
                 return decision
