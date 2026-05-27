@@ -75,10 +75,20 @@ def git(*args):
         return -1, "", ""
 
 def git_commit(msg):
-    return
+    git("add", TRAIN_SCRIPT)
+    return git("commit", "-m", msg)
+
+def git_commit_results(msg):
+    git("add", RESULTS_TSV)
+    return git("commit", "--amend", "--no-edit")
+
+def git_reset_hard():
+    """回滚到上一个 commit，丢弃本轮修改"""
+    return git("reset", "--hard", "HEAD~1")
 
 def git_short_hash():
-    return ""
+    _, out, _ = git("rev-parse", "--short", "HEAD")
+    return out
 
 # ======================================================================
 # 文件操作
@@ -313,6 +323,7 @@ def main():
         status = "BEST"
         save_best_weights()
         log_experiment_result(0, m, status, ["warmup_baseline"])
+        git_commit("baseline: CDS={:.4f}".format(best['cds']))
         print("预热轮完成，当前最优 mAP50 = {:.4f}".format(best['mAP50']))
 
         # ===================== 正式自动调参循环 =====================
@@ -330,9 +341,9 @@ def main():
                 print("未生成参数，跳过")
                 continue
 
+            backup = read_file(TRAIN_SCRIPT)
             params = apply_changes(changes)
-            print("策略：{}".format(desc))
-            print("参数：{}".format(params))
+            print("策略：{}\n参数：{}".format(desc, params))
 
             unload_model()
             ok, duration, current_log = run_training(exp)
@@ -343,19 +354,25 @@ def main():
             current_score = m["cds"] + m["Recall"] + m["Precision"]
             best_score = best["cds"] + best["Recall"] + best["Precision"]
 
-            print(f"\n====== 本轮训练结果 ======")
-            print(f"本轮指标：CDS={m['cds']:.4f} | mAP50={m['mAP50']:.4f} | Recall={m['Recall']:.4f} | Precision={m['Precision']:.4f}")
-            print(f"当前总分：{current_score:.4f} | 历史最佳：{best_score:.4f}")
+            print("\n====== 本轮训练结果 ======")
+            print("本轮指标：CDS={:.4f} | mAP50={:.4f} | Recall={:.4f} | Precision={:.4f}".format(
+                m['cds'], m['mAP50'], m['Recall'], m['Precision']))
+            print("当前总分：{:.4f} | 历史最佳：{:.4f}".format(current_score, best_score))
 
             if current_score > best_score + 0.0005:
                 best = m.copy()
                 no_improve = 0
                 status = "BEST"
                 save_best_weights()
-                print("判断：本轮有提升，刷新最优！")
+                git_commit("exp{}: {}".format(exp, desc))
+                print("判断：本轮有提升，刷新最优！已提交 git 版本。")
             else:
                 no_improve += 1
-                print("判断：本轮无提升，继续优化！无提升连续次数：{}".format(no_improve))
+                git_reset_hard()
+                with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
+                    f.write(backup)
+                print("回滚：已重置 train.py 到本轮修改前状态。")
+                print("判断：本轮无提升，已回滚！无提升连续次数：{}".format(no_improve))
 
             log_experiment_result(exp, m, status, params)
 
