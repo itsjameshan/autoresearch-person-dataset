@@ -155,8 +155,13 @@ echo.
 echo   Web dashboards:
 echo     Dashboard : http://127.0.0.1:5052/   (read-only overview)
 echo.
-echo   You can close this window.
 echo ========================================
 echo.
 
-timeout /T 10 /NOBREAK >NUL
+REM Auto-open dashboard in default browser
+echo Opening dashboard in browser...
+start http://127.0.0.1:5052/
+
+echo.
+echo Press any key to close this window (terminals stay open).
+pause >NUL
