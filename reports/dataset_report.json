@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-05-29 10:32:22",
+  "data_yaml": "D:\\autoresearch\\autoresearch_new\\person_dataset\\person.yaml",
+  "blocking": false,
+  "severe_issues": [],
+  "warnings": [
+    "train/val duplicate filenames: 701",
+    "invalid bbox rows: 5",
+    "class id out of bounds rows: 8"
+  ],
+  "splits": {
+    "train": {
+      "split": "train",
+      "image_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\images\\train",
+      "label_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\labels\\train",
+      "images": 3690,
+      "labels_found": 3690,
+      "labels_missing": 0,
+      "labels_empty": 0,
+      "malformed_label_lines": 0,
+      "class_id_oob": 7,
+      "bbox_invalid": 5,
+      "missing_label_ratio": 0.0
+    },
+    "val": {
+      "split": "val",
+      "image_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\images\\val",
+      "label_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\labels\\val",
+      "images": 857,
+      "labels_found": 857,
+      "labels_missing": 0,
+      "labels_empty": 0,
+      "malformed_label_lines": 0,
+      "class_id_oob": 1,
+      "bbox_invalid": 0,
+      "missing_label_ratio": 0.0
+    },
+    "test": {
+      "split": "test",
+      "image_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\images\\test",
+      "label_dir": "D:\\autoresearch\\autoresearch_new\\person_dataset\\labels\\test",
+      "images": 431,
+      "labels_found": 0,
+      "labels_missing": 431,
+      "labels_empty": 0,
+      "malformed_label_lines": 0,
+      "class_id_oob": 0,
+      "bbox_invalid": 0,
+      "missing_label_ratio": 1.0
+    }
+  },
+  "summary": {
+    "total_images": 4978,
+    "total_missing_labels": 431,
+    "total_malformed_label_lines": 0,
+    "total_invalid_bbox_rows": 5,
+    "total_class_id_oob_rows": 8
+  }
+}

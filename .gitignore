@@ -70,3 +70,8 @@ desktop.ini
 
 # ==================== Claude Code ====================
 .claude/
+
+# ==================== Runtime state ====================
+autoresearch_v2/state/state.db-shm
+autoresearch_v2/state/state.db-wal
+_check_shortcut.ps1
