@@ -114,6 +114,23 @@ def parse_results():
 # ==============================================
 # 把参数写入train.py
 # ==============================================
+def _sanitize(val):
+    """Produce a valid Python literal for train.py assignment."""
+    if isinstance(val, bool):
+        return repr(val)
+    if isinstance(val, (int, float)):
+        if isinstance(val, float):
+            import math
+            if math.isnan(val):
+                return "float('nan')"
+            if math.isinf(val):
+                return "float('-inf')" if val < 0 else "float('inf')"
+        return repr(val)
+    if isinstance(val, str):
+        return repr(val)
+    return repr(float(val))
+
+
 def apply_params(param_dict):
     with open(TRAIN_SCRIPT, "r", encoding="utf-8") as f:
         lines = f.readlines()
@@ -121,7 +138,7 @@ def apply_params(param_dict):
     for i, line in enumerate(lines):
         for key, val in param_dict.items():
             if re.match(rf"^{key}\s*=.*", line.strip()):
-                lines[i] = f"{key} = {val}\n"
+                lines[i] = f"{key} = {_sanitize(val)}\n"
 
     with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
         f.writelines(lines)

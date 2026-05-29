@@ -3,14 +3,13 @@ REM ========================================
 REM  AutoResearch v2 — One-Click Launcher
 REM
 REM  Double-click this file to launch:
-REM    1. Ollama service
+REM    1. Ollama service (if installed)
 REM    2. v2 Orchestrator (live training + agent events)
 REM    3. Web Dashboard  (http://127.0.0.1:5052/)
 REM    4. Live log tail  (run.log streaming)
 REM
-REM  Four terminal windows will open with
-REM  descriptive titles. Close them individually
-REM  or Ctrl+C to stop each component.
+REM  Each component runs in its own window.
+REM  Close them individually or Ctrl+C.
 REM ========================================
 
 setlocal enabledelayedexpansion
@@ -22,13 +21,17 @@ echo ========================================
 echo    AUTORESEARCH v2 — LAUNCHING ALL
 echo ========================================
 echo.
-echo This script will open 4 terminal windows.
-echo Close this window when you are done reviewing.
-echo ========================================
-echo.
 
 REM ── Terminal 1: Ollama Service ──────────────────────────────────
 echo [1/4] Ollama service...
+
+ollama --version >NUL 2>&1
+if "%ERRORLEVEL%"=="1" (
+    echo        [WARN] Ollama is not installed.
+    echo        LLM agents will NOT work. Continuing without Ollama...
+    echo        To install: https://ollama.com
+    goto :ollama_done
+)
 
 REM Check if Ollama is already running
 ollama list >NUL 2>&1
@@ -38,11 +41,10 @@ if "%ERRORLEVEL%"=="0" (
 )
 
 echo        Starting Ollama in a new terminal...
-start "Ollama Service" cmd /c ^
+start "Ollama Service" cmd /k ^
     "echo Starting Ollama... ^&^& ^
      echo. ^&^& ^
-     ollama serve ^&^& ^
-     echo. ^&^& echo Ollama stopped. Close this window. ^& pause"
+     ollama serve"
 
 REM Wait up to 60 seconds for Ollama to become ready
 echo        Waiting for Ollama to start...
@@ -57,28 +59,26 @@ if "%ERRORLEVEL%"=="0" (
 set /a tries+=1
 if !tries! LSS 30 goto :wait_ollama
 echo.
-echo [ERROR] Ollama did not start within 60 seconds.
-echo          Please start it manually: ollama serve
-echo.
-pause
-exit /B 1
+echo        [WARN] Ollama did not start within 60 seconds.
+echo        LLM agents may fail. Continuing anyway...
+goto :ollama_done
 
 :ollama_ready
-
 REM Make sure gemma3:4b is pulled
 ollama list | findstr "gemma3:4b" >NUL
 if "%ERRORLEVEL%"=="1" (
     echo        Pulling gemma3:4b (this may take a few minutes)...
     ollama pull gemma3:4b
     if "%ERRORLEVEL%"=="1" (
-        echo [WARN] Could not pull gemma3:4b. The orchestrator may fail.
+        echo        [WARN] Could not pull gemma3:4b. LLM agents may fail.
     )
 )
+:ollama_done
 
 REM ── Terminal 2: Orchestrator ────────────────────────────────────
 echo.
 echo [2/4] Launching orchestrator (main loop)...
-start "Autoresearch v2 Orchestrator" cmd /c ^
+start "Autoresearch v2 Orchestrator" cmd /k ^
     "cd /D \"%~dp0\" ^&^& ^
      echo ======================================== ^&^& ^
      echo    AUTORESEARCH v2 - MULTI AGENT ^&^& ^
@@ -93,16 +93,16 @@ start "Autoresearch v2 Orchestrator" cmd /c ^
      set PYTHONUTF8=1 ^&^& ^
      python -u -m autoresearch_v2.orchestrator %* ^&^& ^
      echo. ^&^& ^
-     echo Orchestrator finished. ^&^& ^
-     pause"
+     echo Orchestrator finished. Close this window when ready. ^&^& ^
+     pause >NUL"
 
-REM Brief pause to let the orchestrator initialise its state DB
+REM Brief pause so the orchestrator starts creating files
 timeout /T 3 /NOBREAK >NUL
 
 REM ── Terminal 3: Dashboard ───────────────────────────────────────
 echo.
 echo [3/4] Launching web dashboard...
-start "Autoresearch v2 Dashboard" cmd /c ^
+start "Autoresearch v2 Dashboard" cmd /k ^
     "cd /D \"%~dp0\" ^&^& ^
      echo ======================================== ^&^& ^
      echo    AUTORESEARCH v2 DASHBOARD ^&^& ^
@@ -115,14 +115,13 @@ start "Autoresearch v2 Dashboard" cmd /c ^
      python -u -m autoresearch_v2.dashboard ^
          --host 127.0.0.1 --port 5052 ^&^& ^
      echo. ^&^& ^
-     echo Dashboard stopped. ^&^& ^
-     pause"
+     echo Dashboard stopped. Close this window when ready. ^&^& ^
+     pause >NUL"
 
 REM ── Terminal 4: Live Log Tail ────────────────────────────────────
 echo.
 echo [4/4] Launching live log tail...
 
-REM Wait a few seconds so run.log gets created by the orchestrator
 timeout /T 5 /NOBREAK >NUL
 
 start "Live Training Log (run.log)" powershell -NoExit -Command ^
@@ -134,7 +133,6 @@ start "Live Training Log (run.log)" powershell -NoExit -Command ^
      Write-Host 'Close this window or press Ctrl+C to stop.'; ^
      Write-Host '========================================'; ^
      Write-Host ''; ^
-     Start-Sleep -Seconds 2; ^
      while (-not (Test-Path 'run.log')) { ^
          Write-Host 'Waiting for run.log...'; ^
          Start-Sleep -Seconds 3 ^
@@ -152,14 +150,10 @@ echo   Terminal 2: v2 Orchestrator (main loop)
 echo   Terminal 3: Dashboard  http://127.0.0.1:5052/
 echo   Terminal 4: Live log  (run.log tail)
 echo.
-echo   Web dashboards:
-echo     Dashboard : http://127.0.0.1:5052/   (read-only overview)
-echo.
 echo ========================================
 echo.
 
-REM Auto-open dashboard in default browser
-echo Opening dashboard in browser...
+REM Auto-open dashboard in browser
 start http://127.0.0.1:5052/
 
 echo.

@@ -34,6 +34,44 @@ class TrainingFailed(Exception):
         self.log_tail = log_tail
 
 
+def _sanitize_python_value(value):
+    """Convert any config value into a valid Python literal string.
+
+    Handles numpy scalars, plain floats / ints / bools, and strings,
+    always producing syntactically-valid Python source.
+    """
+    try:
+        float_val = float(value)
+        if float_val != float_val:
+            return "float('nan')"
+        if float_val == float("inf"):
+            return "float('inf')"
+        if float_val == float("-inf"):
+            return "float('-inf')"
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(value, bool):
+        return repr(value)
+
+    if isinstance(value, (int, float)):
+        return repr(value)
+
+    if isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    if hasattr(value, "item"):
+        return _sanitize_python_value(value.item())
+
+    try:
+        return repr(float(value))
+    except (TypeError, ValueError):
+        pass
+
+    return repr(str(value))
+
+
 def apply_config_diff(config_diff: dict, train_script: str = TRAIN_SCRIPT) -> bool:
     if not config_diff:
         return True
@@ -44,15 +82,14 @@ def apply_config_diff(config_diff: dict, train_script: str = TRAIN_SCRIPT) -> bo
     modified = False
     for i, line in enumerate(lines):
         stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
         for key, value in config_diff.items():
-            if stripped.startswith(f"{key} =") or stripped.startswith(f"{key}="):
-                if isinstance(value, str):
-                    lines[i] = f'{key} = "{value}"\n'
-                elif isinstance(value, bool):
-                    lines[i] = f"{key} = {value}\n"
-                else:
-                    lines[i] = f"{key} = {value}\n"
+            if re.match(rf"^{key}\s*=", stripped):
+                safe_val = _sanitize_python_value(value)
+                lines[i] = f"{key} = {safe_val}\n"
                 modified = True
+                break
 
     if modified:
         with open(train_script, "w", encoding="utf-8") as f:
