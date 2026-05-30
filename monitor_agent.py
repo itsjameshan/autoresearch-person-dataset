@@ -9,11 +9,13 @@ monitor_agent.py — AutoResearch 持续监督智能体
   5. 支持持续模式（轮询）和一次性模式
 
 运行方式:
-  python monitor_agent.py                      # 一次性生成 handoff.md + blog.md
-  python monitor_agent.py --watch              # 持续监督模式，每30秒轮询
-  python monitor_agent.py --watch --interval 60 # 自定义轮询间隔
-  python monitor_agent.py --handoff-only       # 只生成 handoff.md
-  python monitor_agent.py --blog-only          # 只生成 blog.md
+  python monitor_agent.py                           # 一次性生成 + auto commit
+  python monitor_agent.py --watch                   # 持续监督模式，每30秒轮询 + auto commit
+  python monitor_agent.py --watch --auto-push       # 持续监督 + 每轮自动 push
+  python monitor_agent.py --watch --interval 60     # 自定义轮询间隔
+  python monitor_agent.py --handoff-only            # 只生成 handoff.md
+  python monitor_agent.py --blog-only               # 只生成 blog.md
+  python monitor_agent.py --no-auto-commit          # 禁用自动 git commit
 """
 
 import argparse
@@ -22,6 +24,7 @@ import os
 import sys
 import time
 import hashlib
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from collections import deque
@@ -841,13 +844,103 @@ class BlogGenerator:
 class MonitorAgent:
     """AutoResearch 持续监督智能体"""
 
-    def __init__(self):
+    def __init__(self, *, auto_commit: bool = True, auto_push: bool = False):
         self.reader = DataReader()
         self.analyzer = StateAnalyzer(self.reader)
         self.handoff_gen = HandoffGenerator()
         self.blog_gen = BlogGenerator()
         self._last_handoff_hash = ""
         self._last_blog_hash = ""
+        self._auto_commit = auto_commit
+        self._auto_push = auto_push
+        self._round = 0
+
+    def _git_add(self, *paths: Path) -> bool:
+        try:
+            result = subprocess.run(
+                ["git", "add"] + [str(p) for p in paths],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(BASE_DIR),
+            )
+            return result.returncode == 0
+        except Exception as e:
+            log(f"git add 失败: {e}", "WARN")
+            return False
+
+    def _git_commit(self, message: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["git", "commit", "-m", message],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(BASE_DIR),
+            )
+            if result.returncode == 0:
+                return True
+            if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
+                return True
+            log(f"git commit 失败: {result.stderr.strip()}", "WARN")
+            return False
+        except Exception as e:
+            log(f"git commit 失败: {e}", "WARN")
+            return False
+
+    def _git_push(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["git", "push"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(BASE_DIR),
+            )
+            if result.returncode == 0:
+                return True
+            log(f"git push 失败: {result.stderr.strip()}", "WARN")
+            return False
+        except Exception as e:
+            log(f"git push 失败: {e}", "WARN")
+            return False
+
+    def _auto_git_snapshot(self, state: dict, files_changed: list[str], round_num: int = 0):
+        if not self._auto_commit:
+            return
+        if not files_changed:
+            log("无文件变更，跳过 git commit", "INFO")
+            return
+
+        paths = [BASE_DIR / f for f in files_changed]
+        if not self._git_add(*paths):
+            return
+
+        bm = state.get("best_metrics", {})
+        cds = bm.get("cds", bm.get("CDS", 0))
+        total = state.get("total_experiments", 0)
+        completed = state.get("completed_count", 0)
+        trend = state.get("cds_trend", "?")
+        stag = "STAGNANT" if state.get("stagnation") else ""
+
+        if round_num:
+            msg = (
+                f"[monitor] round#{round_num} | "
+                f"exp={completed}/{total} | "
+                f"CDS={cds:.4f} | "
+                f"trend={trend}"
+                + (f" | {stag}" if stag else "")
+            )
+        else:
+            msg = (
+                f"[monitor] oneshot | "
+                f"exp={completed}/{total} | "
+                f"CDS={cds:.4f} | "
+                f"trend={trend}"
+                + (f" | {stag}" if stag else "")
+            )
+
+        if self._git_commit(msg):
+            log(f"git commit: {msg}", "OK")
+            if self._auto_push:
+                if self._git_push():
+                    log("git push 成功", "OK")
+        else:
+            log("git commit 跳过（无变更或失败）", "INFO")
 
     def run_once(self, *, gen_handoff: bool = True, gen_blog: bool = True) -> dict:
         log("开始收集 AutoResearch 状态...")
@@ -857,6 +950,7 @@ class MonitorAgent:
             f"最佳 CDS: {state['best_metrics'].get('cds', state['best_metrics'].get('CDS', 0)):.4f}")
 
         result = {"state": state}
+        files_changed = []
 
         if gen_handoff:
             handoff_content = self.handoff_gen.generate(state)
@@ -866,6 +960,7 @@ class MonitorAgent:
                 log(f"handoff.md 已更新 → {HANDOFF_MD}", "GEN")
                 self._last_handoff_hash = new_hash
                 result["handoff_updated"] = True
+                files_changed.append("handoff.md")
             else:
                 log("handoff.md 内容无变化，跳过写入", "INFO")
                 result["handoff_updated"] = False
@@ -879,24 +974,28 @@ class MonitorAgent:
                 log(f"blog.md 已更新 → {BLOG_MD}", "GEN")
                 self._last_blog_hash = new_hash
                 result["blog_updated"] = True
+                files_changed.append("blog.md")
             else:
                 log("blog.md 内容无变化，跳过写入", "INFO")
                 result["blog_updated"] = False
             result["blog"] = blog_content
+
+        if files_changed:
+            self._auto_git_snapshot(state, files_changed, self._round)
 
         return result
 
     def watch(self, poll_interval: int = DEFAULT_POLL_INTERVAL):
         log(f"启动持续监督模式 (间隔 {poll_interval}s)")
         log(f"监听目标: {V2_STATE_DB} / {V2_EVENTS_FILE}")
+        log(f"自动提交: {'✅' if self._auto_commit else '❌'} | 自动推送: {'✅' if self._auto_push else '❌'}")
         log("按 Ctrl+C 停止")
         log("")
 
-        iteration = 0
         try:
             while True:
-                iteration += 1
-                log(f"── 第 {iteration} 次轮询 ──")
+                self._round += 1
+                log(f"── 第 {self._round} 次轮询 ──")
                 result = self.run_once()
                 state = result["state"]
 
@@ -911,6 +1010,7 @@ class MonitorAgent:
                 time.sleep(poll_interval)
         except KeyboardInterrupt:
             log("收到中断信号，生成最终报告...")
+            self._round += 1
             self.run_once()
             log("监督智能体已停止", "OK")
 
@@ -927,11 +1027,18 @@ def main():
                         help="只生成 handoff.md，不生成 blog.md")
     parser.add_argument("--blog-only", action="store_true",
                         help="只生成 blog.md，不生成 handoff.md")
+    parser.add_argument("--auto-push", action="store_true",
+                        help="每次轮询后自动 git push（需配合 --watch 使用）")
+    parser.add_argument("--no-auto-commit", action="store_true",
+                        help="禁用自动 git commit（默认启用）")
     parser.add_argument("--quiet", action="store_true",
                         help="安静模式，仅输出关键信息")
     args = parser.parse_args()
 
-    agent = MonitorAgent()
+    agent = MonitorAgent(
+        auto_commit=not args.no_auto_commit,
+        auto_push=args.auto_push,
+    )
 
     if args.watch:
         agent.watch(poll_interval=args.interval)
