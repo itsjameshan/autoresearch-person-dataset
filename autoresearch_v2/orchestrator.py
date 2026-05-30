@@ -443,6 +443,14 @@ class Orchestrator:
                     if result.best_params:
                         from autoresearch_v2.tools.train_dispatcher import apply_config_diff
                         apply_config_diff(result.best_params)
+                    self._git_commit(
+                        run_id=run_id,
+                        iteration=self.iteration,
+                        context="HPO",
+                        metrics={"cds": result.best_cds,
+                                 "precision": 0, "recall": 0},
+                        extra_detail=f"best_params={result.best_params}",
+                    )
                     self.events.emit(
                         "iteration_end",
                         iteration=self.iteration,
@@ -524,6 +532,14 @@ class Orchestrator:
                 f"| P={metrics.get('precision',0):.4f} | R={metrics.get('recall',0):.4f}")
 
             self.events.emit("eval_complete", run_id=run_id, metrics=metrics)
+
+            self._git_commit(
+                run_id=run_id,
+                iteration=self.iteration,
+                context="TRAIN",
+                metrics=metrics,
+                extra_detail="",
+            )
 
             gates_pass, gates_msg = self._check_quality_gates(metrics)
             log(f"Quality Gates: {gates_msg}")
@@ -607,6 +623,84 @@ class Orchestrator:
             log(f"未解决数据问题: {len(issues)}")
 
         log("=" * 60)
+
+    def _git_commit(self, run_id: str, iteration: int, context: str,
+                    metrics: dict = None, extra_detail: str = ""):
+        """Commit train.py + tracked artifacts and push, so every round is auditable."""
+        import subprocess
+
+        if metrics is None:
+            metrics = {}
+
+        cds = metrics.get("cds", 0)
+        p_val = metrics.get("precision", 0)
+        r_val = metrics.get("recall", 0)
+
+        subject = f"exp_{iteration:03d}: [{context}] CDS={cds:.4f} P={p_val:.4f} R={r_val:.4f}"
+        if len(subject) > 72:
+            subject = f"exp_{iteration:03d}: [{context}] CDS={cds:.4f}"
+
+        body_lines = [f"run_id={run_id}", f"iteration={iteration}"]
+        if extra_detail:
+            body_lines.append(extra_detail)
+        body = "\n".join(body_lines)
+
+        try:
+            _run = subprocess.run(
+                ["git", "add", "train.py", "results.tsv", "last_metrics.json",
+                 "activity_events.jsonl", "reports"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception:
+            log("git add 失败 (git 不可用?)", "WARN")
+            return
+
+        try:
+            _run = subprocess.run(
+                ["git", "commit", "-m", subject, "-m", body],
+                capture_output=True, text=True, timeout=30,
+            )
+            stdout = _run.stdout.strip()
+            stderr = _run.stderr.strip()
+            if _run.returncode == 0:
+                short = stdout.split("\n")[0] if stdout else "committed"
+                log(f"git commit: {short}", "OK")
+            elif "nothing to commit" in (stdout + stderr).lower():
+                log("git commit: nothing to commit (clean)", "INFO")
+                return
+            else:
+                log(f"git commit 失败: {stderr}", "WARN")
+                return
+        except Exception as e:
+            log(f"git commit 异常: {e}", "WARN")
+            return
+
+        try:
+            _run = subprocess.run(
+                ["git", "push"],
+                capture_output=True, text=True, timeout=60,
+            )
+            if _run.returncode == 0:
+                log("git push: OK", "OK")
+            else:
+                log(f"git push 失败: {_run.stderr.strip()}", "WARN")
+        except Exception as e:
+            log(f"git push 异常: {e}", "WARN")
+
+    @staticmethod
+    def _current_metrics_for_commit() -> dict:
+        """Pull latest metrics from last_metrics.json if it exists."""
+        import json as _json
+        metrics_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "last_metrics.json",
+        )
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path, "r", encoding="utf-8") as f:
+                    return _json.load(f)
+            except Exception:
+                pass
+        return {}
 
 
 def main():
