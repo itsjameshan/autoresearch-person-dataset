@@ -39,11 +39,12 @@ class BudgetGuard:
         period = period or self._current_period()
         existing = self.state.get_budget(period)
         if existing is None:
-            self.state.upsert_budget(
-                period,
-                gpu_minutes_limit=self.default_gpu_limit,
-                dollars_limit=self.default_dollar_limit,
-            )
+            if self.default_gpu_limit > 0 or self.default_dollar_limit > 0:
+                self.state.upsert_budget(
+                    period,
+                    gpu_minutes_limit=self.default_gpu_limit,
+                    dollars_limit=self.default_dollar_limit,
+                )
 
     def check_remaining(self, period: str = None) -> dict:
         period = period or self._current_period()
