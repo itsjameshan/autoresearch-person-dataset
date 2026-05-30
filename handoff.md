@@ -1,13 +1,13 @@
 # AutoResearch Handoff — Agent 状态传递
 
-> 生成时间: 2026-05-29 10:41:25
+> 生成时间: 2026-05-30 14:01:10
 > 数据源: v2
 
 ## 1. 会话状态 (Session Status)
 
-- 总实验数: 1
+- 总实验数: 8
 - 已完成: 0
-- 失败: 0
+- 失败: 7
 - 运行中: 1
 - 连续失败: 0
 
@@ -23,7 +23,14 @@
 
 | 时间 | Agent | Action | Rationale |
 |------|-------|--------|-----------|
-| 2026-05-29 02:32:35 | researcher | hpo_sweep | 当前仍在冷启动阶段（暂无 completed 实验），先用 Optuna 在关键参数空间做初始探索以建立基线。 |
+| 2026-05-30 06:01:10 | optuna | hpo_sweep | trial=6 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:01:07 | optuna | hpo_sweep | trial=5 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:01:05 | optuna | hpo_sweep | trial=4 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:01:03 | optuna | hpo_sweep | trial=3 study=hpo_20260530_140050_db33ec params={"LR0": 0.01 |
+| 2026-05-30 06:01:00 | optuna | hpo_sweep | trial=2 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:00:58 | optuna | hpo_sweep | trial=1 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:00:55 | optuna | hpo_sweep | trial=0 study=hpo_20260530_140050_db33ec params={"LR0": 0.00 |
+| 2026-05-30 06:00:50 | researcher | hpo_sweep | 当前仍在冷启动阶段（暂无 completed 实验），先用 Optuna 在关键参数空间做初始探索以建立基线。 |
 
 ## 6. 数据问题 (Data Issues)
 
@@ -31,7 +38,7 @@
 
 ## 7. 预算状态 (Budget)
 
-- 期间 `2026-W22`: GPU 0.0/0.0min (剩余 infmin)
+(无预算限制)
 
 ## 8. 最近实验列表 (Recent Experiments)
 
