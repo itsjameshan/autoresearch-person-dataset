@@ -1,12 +1,5 @@
 import os
 import sys
-import torch
-
-_original_load = torch.load
-def _safe_load(*args, **kwargs):
-    kwargs.setdefault("weights_only", False)
-    return _original_load(*args, **kwargs)
-torch.load = _safe_load
 
 from ultralytics import YOLO
 from evaluate import evaluate_model, print_metrics
@@ -20,16 +13,16 @@ DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
 IMGSZ = 1280
 EPOCHS = 100
 
-BATCH = 16
-DEVICE = 0
-AMP = True
+BATCH = 8
+DEVICE = "cpu"
+AMP = False
 CACHE = "disk"
 WORKERS = 4
 SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.005
+LR0 = 0.006177430943619523
 LRF = 0.001
 HSV_H = 0.015
 HSV_S = 0.7
@@ -39,13 +32,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.40919616423534183
+MOSAIC = 0.3681521095156265
 MIXUP = 0.5  # Increased mixup
 COPY_PASTE = 0.15
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 7.340279606636548
+BOX = 10.197112905315404
 CLS = 0.5
 
 CONF = 0.001

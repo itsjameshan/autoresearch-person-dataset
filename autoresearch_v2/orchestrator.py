@@ -36,6 +36,12 @@ from autoresearch_v2.tools.eval_dispatcher import EvalDispatcher
 from autoresearch_v2.events import EventLogger, DEFAULT_EVENTS_PATH
 from autoresearch_v2.dataset_inspector import inspect_dataset
 
+DOCTOR_AVAILABLE = True
+try:
+    from autoresearch_v2.agents.overseer_doctor import ErrorDetector, FixExecutor
+except ImportError:
+    DOCTOR_AVAILABLE = False
+
 
 TARGET_CDS = 0.85
 PRECISION_GATE = 0.90
@@ -182,6 +188,32 @@ class Orchestrator:
 
     def _handle_triage(self, error_info: dict, log_tail: str = "",
                        config_diff: dict = None) -> dict:
+        log(f"Triage诊断错误: {error_info.get('error', '')[:100]}", "AGENT")
+
+        if DOCTOR_AVAILABLE and log_tail:
+            doctor_detector = ErrorDetector()
+            fake_logs = [{"line": log_tail[-5000:], "level": "CRIT"}]
+            doctor_errors = doctor_detector.detect_errors(fake_logs)
+            if doctor_errors:
+                first_error = doctor_errors[0]
+                doctor_action = first_error.get("recommended_action", "")
+                if doctor_action not in ("escalate", "ignore"):
+                    executor = FixExecutor()
+                    result = executor.execute(
+                        {"recommended_action": doctor_action,
+                         "root_cause_hypothesis": first_error.get("root_cause", ""),
+                         "confidence": 0.9},
+                        first_error,
+                    )
+                    log(f"Doctor快速修复: {result['message']}", "OK")
+                    if result["success"] and doctor_action in (
+                        "batch_half", "lr_half_and_disable_amp"
+                    ):
+                        log("Doctor修复了训练参数，跳过Triage LLM调用", "OK")
+                        return {"recommended_action": "retry_with_fix",
+                                "root_cause_hypothesis": first_error.get("root_cause", ""),
+                                "fix_diff": {"_doctor_fixed": True}}
+
         diagnosis = self.triage.diagnose(error_info, log_tail, config_diff)
         action = diagnosis.get("recommended_action", "escalate_human")
 

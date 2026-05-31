@@ -19,6 +19,7 @@ agent_overseer.py — 智能体总管 (v2 — 内置 Web UI)
   ├── 主战斗群：Orchestrator (Researcher + Curator + Triage 一体化)
   ├── 监督团队：SupervisorAgent (监控 + 审计 + 硬件安全 + 异常检测)
   ├── 合规团队：ArchitectureSupervisorAgent (架构合规检查)
+  ├── 诊断医生：OverseerDoctor (实时监控日志 + 自动修复错误)
   ├── 可视化(可选)：v2 Dashboard (只读仪表盘，端口 5052)
   └── 总管自带 Web UI：实时状态 + 日志 + 控制面板
 """
@@ -689,8 +690,9 @@ class AgentOverseer:
         self.max_hours = config.get("max_hours", MAX_HOURS)
         self.health_interval = config.get("health_interval", HEALTH_CHECK_INTERVAL)
         self.enable_v2_dashboard = config.get("enable_v2_dashboard", True)
-        self.enable_arch_supervisor = config.get("enable_arch_supervisor", True)
         self.enable_supervisor = config.get("enable_supervisor", True)
+        self.enable_arch_supervisor = config.get("enable_arch_supervisor", True)
+        self.enable_doctor = config.get("enable_doctor", True)
         self.auto_approve_hitl = config.get("auto_approve_hitl", True)
         self.data_yaml = config.get("data_yaml", os.path.join(PROJECT_ROOT, "person_dataset", "person.yaml"))
         self.imgsz = config.get("imgsz", 1280)
@@ -755,6 +757,22 @@ class AgentOverseer:
                 severity="warning",
             ))
 
+        if self.enable_doctor:
+            doctor_cmd = [
+                PYTHON, "-u", "-m", "autoresearch_v2.agents.overseer_doctor",
+                "--watch",
+                "--overseer-url", f"http://127.0.0.1:{self.web_port}",
+                "--interval", "10",
+                "--llm-backend", self.llm_backend,
+                "--ollama-model", self.ollama_model,
+            ]
+            self.agents.append(ManagedAgent(
+                name="OverseerDoctor",
+                role="总管诊断医生: 实时监控 Web UI 日志 + 自动修复 error/bug + 卡死重启 + 策略调整",
+                cmd=doctor_cmd,
+                severity="critical",
+            ))
+
         if self.enable_v2_dashboard:
             dashboard_cmd = [
                 PYTHON, "-u", "-m", "autoresearch_v2.dashboard",
@@ -817,7 +835,31 @@ class AgentOverseer:
             time.sleep(2)
 
         self.start_time = time.time()
+
+        if self.enable_doctor:
+            self._wait_for_doctor_ready()
+
         return all_ok
+
+    def _wait_for_doctor_ready(self, timeout: int = 30):
+        log("等待总管诊断医生就绪...")
+        doctor_log_file = os.path.join(PROJECT_ROOT, "doctor.log")
+        start = time.time()
+        while time.time() - start < timeout:
+            doctor = self._find_agent("OverseerDoctor")
+            if doctor and doctor.is_alive():
+                if os.path.exists(doctor_log_file):
+                    try:
+                        with open(doctor_log_file, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        if "Overseer Doctor V2" in content:
+                            log("OverseerDoctor 已就绪，开始实时监控", "OK")
+                            return True
+                    except Exception:
+                        pass
+            time.sleep(2)
+        log("OverseerDoctor 就绪检查超时，但进程仍在尝试连接", "WARN")
+        return False
 
     def stop_all(self):
         log("正在让所有智能体下班...")
@@ -1129,6 +1171,8 @@ def main():
                         help="不启动 SupervisorAgent")
     parser.add_argument("--no-arch-supervisor", action="store_true",
                         help="不启动 ArchitectureSupervisor")
+    parser.add_argument("--no-doctor", action="store_true",
+                        help="不启动 OverseerDoctor (总管诊断医生)")
     parser.add_argument("--manual-hitl", action="store_true",
                         help="禁用自动审批，改为人工审批")
     args = parser.parse_args()
@@ -1142,6 +1186,7 @@ def main():
         "enable_v2_dashboard": not args.no_v2_dashboard,
         "enable_supervisor": not args.no_supervisor,
         "enable_arch_supervisor": not args.no_arch_supervisor,
+        "enable_doctor": not args.no_doctor,
         "auto_approve_hitl": not args.manual_hitl,
         "data_yaml": args.data_yaml,
         "imgsz": args.imgsz,

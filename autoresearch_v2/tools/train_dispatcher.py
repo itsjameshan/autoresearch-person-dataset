@@ -142,9 +142,8 @@ def run_training(train_script: str = TRAIN_SCRIPT,
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
 
-    if os.path.exists(log_file):
-        os.remove(log_file)
-
+    # Note: We no longer remove the log file to avoid PermissionError on Windows
+    # The "w" mode in open() will automatically truncate it
     try:
         import torch
         if torch.cuda.is_available():
