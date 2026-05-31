@@ -185,6 +185,8 @@ ERROR_PATTERNS = [
      "json_parse_error", "retry_or_fallback", "JSON解析失败"),
     (re.compile(r"researcher.*LLM.*failed|LLM\s+call\s+failed", re.I),
      "llm_failed", "restart_agent", "LLM调用失败"),
+    (re.compile(r"Ollama\s+call\s+failed|Ollama\s+调用失败|Ollama\s+连接失败|Ollama.*不可达", re.I),
+     "ollama_failed", "restart_service", "Ollama服务异常"),
     (re.compile(r"连续\s*\d+\s*次.*失败|consecutive.*fail", re.I),
      "consecutive_fails", "escalate", "连续失败"),
     (re.compile(r"Dataset\s+Gate\s+拦截", re.I),
