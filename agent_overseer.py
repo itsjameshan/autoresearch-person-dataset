@@ -24,6 +24,7 @@ agent_overseer.py — 智能体总管 (v2 — 内置 Web UI)
 """
 
 import argparse
+import io
 import json
 import os
 import subprocess
@@ -52,6 +53,44 @@ STATE_DB = os.path.join(V2_ROOT, "state", "state.db")
 _LOG_BUFFER_MAX = 500
 _log_buffer = collections.deque(maxlen=_LOG_BUFFER_MAX)
 _log_lock = threading.Lock()
+_stdout_safe = False
+
+
+def _fix_console_encoding():
+    """Auto-detect and fix console encoding issues on Windows.
+    Called once at startup — self-detection + self-healing."""
+    global _stdout_safe
+
+    if "PYTHONIOENCODING" not in os.environ:
+        os.environ["PYTHONIOENCODING"] = "utf-8"
+
+    if hasattr(sys.stdout, "buffer"):
+        try:
+            original = sys.stdout
+            sys.stdout = io.TextIOWrapper(
+                sys.stdout.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
+            )
+            sys.stdout.reconfigure = getattr(original, "reconfigure", None)
+            _stdout_safe = True
+        except Exception:
+            pass
+
+    if hasattr(sys.stderr, "buffer"):
+        try:
+            sys.stderr = io.TextIOWrapper(
+                sys.stderr.buffer,
+                encoding="utf-8",
+                errors="replace",
+                line_buffering=True,
+            )
+        except Exception:
+            pass
+
+
+_fix_console_encoding()
 
 
 def log(msg: str, level: str = "INFO"):
@@ -64,8 +103,16 @@ def log(msg: str, level: str = "INFO"):
     line = f"{ts} {prefix} {msg}"
     with _log_lock:
         _log_buffer.append({"ts": ts, "level": level, "msg": msg, "line": line})
-    print(line)
-    sys.stdout.flush()
+    try:
+        print(line)
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        try:
+            safe_line = line.encode("utf-8", errors="replace").decode("utf-8")
+            print(safe_line)
+            sys.stdout.flush()
+        except Exception:
+            pass
 
 
 class ManagedAgent:
