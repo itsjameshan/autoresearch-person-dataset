@@ -90,6 +90,7 @@ class ManagedAgent:
     def launch(self):
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env.update(self.env)
 
         log(f"启动 [{self.name}] ({self.role})", "START")
