@@ -59,36 +59,22 @@ _stdout_safe = False
 
 def _fix_console_encoding():
     """Auto-detect and fix console encoding issues on Windows.
-    Called once at startup — self-detection + self-healing."""
+    Uses reconfigure() — does NOT create new wrappers that close the buffer."""
     global _stdout_safe
 
     if "PYTHONIOENCODING" not in os.environ:
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
-    if hasattr(sys.stdout, "buffer"):
-        try:
-            original = sys.stdout
-            sys.stdout = io.TextIOWrapper(
-                sys.stdout.buffer,
-                encoding="utf-8",
-                errors="replace",
-                line_buffering=True,
-            )
-            sys.stdout.reconfigure = getattr(original, "reconfigure", None)
-            _stdout_safe = True
-        except Exception:
-            pass
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        _stdout_safe = True
+    except Exception:
+        pass
 
-    if hasattr(sys.stderr, "buffer"):
-        try:
-            sys.stderr = io.TextIOWrapper(
-                sys.stderr.buffer,
-                encoding="utf-8",
-                errors="replace",
-                line_buffering=True,
-            )
-        except Exception:
-            pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 _fix_console_encoding()
