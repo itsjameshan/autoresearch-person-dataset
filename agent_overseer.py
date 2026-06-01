@@ -25,7 +25,6 @@ agent_overseer.py — 智能体总管 (v2 — 内置 Web UI)
 """
 
 import argparse
-import io
 import json
 import os
 import subprocess
@@ -54,27 +53,13 @@ STATE_DB = os.path.join(V2_ROOT, "state", "state.db")
 _LOG_BUFFER_MAX = 500
 _log_buffer = collections.deque(maxlen=_LOG_BUFFER_MAX)
 _log_lock = threading.Lock()
-_stdout_safe = False
 
 
 def _fix_console_encoding():
-    """Auto-detect and fix console encoding issues on Windows.
-    Uses reconfigure() — does NOT create new wrappers that close the buffer."""
-    global _stdout_safe
-
+    """Set default encoding to UTF-8 for subprocesses.
+    Does NOT touch sys.stdout — that can break Flask on Windows."""
     if "PYTHONIOENCODING" not in os.environ:
         os.environ["PYTHONIOENCODING"] = "utf-8"
-
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        _stdout_safe = True
-    except Exception:
-        pass
-
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
 
 
 _fix_console_encoding()
@@ -952,12 +937,41 @@ class AgentOverseer:
             "web_port": self.web_port,
         }
 
+    def _kill_port_process(self) -> bool:
+        port = self.web_port
+        killed = False
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and ("LISTENING" in line or "ESTABLISHED" in line):
+                    parts = line.strip().split()
+                    pid = parts[-1]
+                    try:
+                        subprocess.run(
+                            ["taskkill", "/F", "/PID", pid],
+                            capture_output=True, timeout=5
+                        )
+                        log(f"已清理占用端口 {port} 的旧进程 PID={pid}", "WARN")
+                        killed = True
+                    except Exception:
+                        pass
+            if killed:
+                time.sleep(1)
+        except Exception:
+            pass
+        return killed
+
     def _start_web_ui(self):
         try:
             from flask import Flask, jsonify, render_template_string, request
         except ImportError:
             log("Flask 未安装，跳过 Web UI。pip install flask", "WARN")
             return
+
+        self._kill_port_process()
 
         app = Flask(__name__)
         overseer_ref = self
@@ -1011,7 +1025,9 @@ class AgentOverseer:
             return jsonify({"ok": False, "error": "unknown action"}), 400
 
         connect_url = f"http://127.0.0.1:{self.web_port}"
-        log(f"Web UI 启动: {connect_url}", "WEB")
+        log(f"Web UI 启动中: {connect_url}", "WEB")
+
+        run_flask_error = [None]
 
         def run_flask():
             try:
@@ -1020,14 +1036,36 @@ class AgentOverseer:
                     port=self.web_port,
                     debug=False,
                     use_reloader=False,
+                    threaded=True,
                 )
+            except OSError as e:
+                run_flask_error[0] = str(e)
             except Exception as e:
+                run_flask_error[0] = str(e)
                 log(f"Web UI 异常: {e}", "CRIT")
 
         t = threading.Thread(target=run_flask, daemon=True)
         t.start()
 
-        time.sleep(1.5)
+        ready = False
+        for _ in range(30):
+            time.sleep(0.5)
+            if run_flask_error[0]:
+                log(f"Web UI 启动失败: {run_flask_error[0]}", "CRIT")
+                return
+            try:
+                import urllib.request
+                urllib.request.urlopen(f"{connect_url}/api/health", timeout=0.5)
+                ready = True
+                break
+            except Exception:
+                pass
+
+        if not ready:
+            log("Web UI 启动超时 (15秒)，Flask 可能卡住，请检查端口是否被占用", "CRIT")
+            return
+
+        log(f"Web UI 已就绪: {connect_url}", "WEB")
         self._try_open_browser(connect_url)
 
     def _try_open_browser(self, url: str):

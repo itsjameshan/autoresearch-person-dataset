@@ -67,7 +67,10 @@ def run_training(exp_num):
 
     # 每次训练前清空旧日志，避免解析到上一轮的结果
     if os.path.exists(LOG_FILE):
-        os.remove(LOG_FILE)
+        try:
+            os.remove(LOG_FILE)
+        except (PermissionError, OSError):
+            pass
 
     # 启动训练，固定跑2个epoch
     proc = subprocess.Popen(
@@ -137,7 +140,7 @@ def apply_params(param_dict):
 
     for i, line in enumerate(lines):
         for key, val in param_dict.items():
-            if re.match(rf"^{key}\s*=.*", line.strip()):
+            if re.match(rf"^{key}\s*=.*", line):
                 lines[i] = f"{key} = {_sanitize(val)}\n"
 
     with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
@@ -153,13 +156,13 @@ def set_base_config():
         "MODEL": '"yolo12s.pt"',
         "IMGSZ": "1280",
         "BATCH": "2",
-        "DEVICE": "0",
+        "EPOCHS": str(TRAIN_EPOCHS),
         "SINGLE_CLS": "True",
         "TIME_MINUTES": "0",
     }
     for i, line in enumerate(lines):
         for k, v in fixed.items():
-            if re.match(rf"^{k}\s*=.*", line.strip()):
+            if re.match(rf"^{k}\s*=.*", line):
                 lines[i] = f"{k} = {v}\n"
     with open(TRAIN_SCRIPT, "w", encoding="utf-8") as f:
         f.writelines(lines)
