@@ -187,6 +187,8 @@ ERROR_PATTERNS = [
      "llm_failed", "restart_agent", "LLM调用失败"),
     (re.compile(r"Ollama\s+call\s+failed|Ollama\s+调用失败|Ollama\s+连接失败|Ollama.*不可达", re.I),
      "ollama_failed", "restart_service", "Ollama服务异常"),
+    (re.compile(r"连续.*CDS.*(完全相同|停滞|卡死|波动)|疑似卡死|平台期", re.I),
+     "stagnation", "force_strategy_change", "训练停滞/平台期"),
     (re.compile(r"连续\s*\d+\s*次.*失败|consecutive.*fail", re.I),
      "consecutive_fails", "escalate", "连续失败"),
     (re.compile(r"Dataset\s+Gate\s+拦截", re.I),
@@ -248,7 +250,7 @@ class ErrorDetector:
         error_keywords = [
             "error", "crash", "fail", "traceback", "fatal",
             "exception", "unreachable", "violation", "oom",
-            "nan", "timeout", "denied", "locked",
+            "nan", "timeout", "denied", "locked", "卡死", "停滞",
         ]
         line_lower = line.lower()
         return any(kw in line_lower for kw in error_keywords)
@@ -947,6 +949,7 @@ class OverseerDoctor:
         self.stuck_fixes = 0
         self.strategy_changes = 0
         self.last_health_snapshot = {}
+        self._consecutive_timeouts = 0
 
         os.makedirs(os.path.dirname(DOCTOR_ACTION_LOG), exist_ok=True)
         os.makedirs(os.path.dirname(DOCTOR_STATE_FILE), exist_ok=True)
@@ -1084,10 +1087,29 @@ class OverseerDoctor:
         status = self.fetcher.fetch_status()
 
         if not status and not logs:
-            log("无日志可读取（总管 Web UI 可能未运行）", "WARN")
+            self._consecutive_timeouts += 1
+            log(f"无日志可读取（总管 Web UI 可能未运行）[{self._consecutive_timeouts}/5]", "WARN")
+            if self._consecutive_timeouts >= 5:
+                log("Web UI 连续 5 次超时，强制重启 Orchestrator", "STUCK")
+                result = self.executor.execute(
+                    {"recommended_action": "restart_orchestrator",
+                     "root_cause_hypothesis": "Web UI 连续超时，Orchestrator 假死",
+                     "confidence": 0.9},
+                    {"target_agent": "Orchestrator",
+                     "error_type": "overseer_timeout",
+                     "log_line": "Web UI timeout x5",
+                     "log_level": "CRIT"})
+                if result["success"]:
+                    self.stuck_fixes += 1
+                    self._consecutive_timeouts = 0
+                    time.sleep(5)
+                    self._wait_for_overseer(max_wait=30)
+                write_action_record({"type": "stuck", "alert": {"error_type": "overseer_timeout"}, "result": result})
             return {"logs_count": 0, "errors_found": 0, "fixes_applied": 0,
                     "stuck_fixes": 0, "strategy_changes": 0,
                     "overseer_status": "unreachable"}
+
+        self._consecutive_timeouts = 0
 
         agents = status.get("agents", [])
         health = status.get("health", {})

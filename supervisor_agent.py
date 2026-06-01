@@ -324,6 +324,8 @@ class AnomalyDetector:
             return False, ""
         recent = exp_history[-STAGNATION_THRESHOLD:]
         cds_values = [e.get("CDS", e.get("cds", 0)) for e in recent]
+        if any(v <= 0 for v in cds_values):
+            return False, ""
         if len(set([round(v, 3) for v in cds_values])) == 1:
             return True, f"连续{STAGNATION_THRESHOLD}次CDS完全相同，疑似卡死"
         max_cds = max(cds_values)
