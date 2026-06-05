@@ -1,28 +1,36 @@
 # 架构合规监督报告 (v2)
 
-生成时间: 2026-04-30 17:31:15
+生成时间: 2026-06-05 08:46:56
 
 ## 总体评估
 
-**状态: ⚠️ 基本合规** — 12 个警告
+**状态: ⚠️ 基本合规** — 13 个警告
 
 | 级别 | 数量 |
 |------|------|
 | 🚨 CRITICAL | 0 |
-| ⚠️ WARNING | 12 |
+| ⚠️ WARNING | 13 |
 | 📋 INFO | 0 |
-| **总计** | **12** |
+| **总计** | **13** |
 
 ## 按类别统计
 
 | 类别 | CRITICAL | WARNING | INFO |
 |------|----------|---------|------|
-| agent_structure | 0 | 3 | 0 |
+| agent_structure | 0 | 4 | 0 |
 | deterministic_tools | 0 | 1 | 0 |
 | orchestrator | 0 | 5 | 0 |
 | state_layer | 0 | 3 | 0 |
 
 ## 违规详情
+
+### ⚠️ [ARCH-001] 三智能体架构
+
+- **严重级别**: WARNING
+- **类别**: agent_structure
+- **违规描述**: 发现架构未定义的智能体文件: agents/overseer_doctor.py
+- **详情**: 架构只允许 Researcher / Curator / Triage 三个智能体
+- **修复建议**: 确认 overseer_doctor.py 是否为辅助工具而非独立智能体
 
 ### ⚠️ [ARCH-007] 终止条件(v2)
 
@@ -124,7 +132,7 @@
 
 | 规则ID | 规则名称 | 状态 |
 |--------|----------|------|
-| ARCH-001 | 三智能体架构 | ✅ PASS |
+| ARCH-001 | 三智能体架构 | ⚠️ WARNING |
 | ARCH-002 | 智能体模型分配(v2) | ✅ PASS |
 | ARCH-003 | 合约优先 | ✅ PASS |
 | ARCH-004 | 禁止NAS | ✅ PASS |

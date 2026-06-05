@@ -8,12 +8,12 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG
 # ══════════════════════════════════════════════════════════════
 
-MODEL = "yolo12m.pt"
+MODEL = "yolo12n.pt"
 DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
-IMGSZ = 1280
-EPOCHS = 100
+IMGSZ = 640
+EPOCHS = 2
 
-BATCH = 8
+BATCH = 1
 DEVICE = "cpu"
 AMP = False
 CACHE = "disk"
@@ -22,8 +22,8 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.006177430943619523
-LRF = 0.001
+LR0 = 0.0030710573677773722
+LRF = 0.0002
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
@@ -32,14 +32,14 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.3681521095156265
-MIXUP = 0.5  # Increased mixup
-COPY_PASTE = 0.15
+MOSAIC = 0.8123957592679836
+MIXUP = 0.1
+COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 10.197112905315404
-CLS = 0.5
+BOX = 19.260714596148745
+CLS = 1.0
 
 CONF = 0.001
 IOU = 0.5
