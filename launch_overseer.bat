@@ -4,8 +4,8 @@ title 智能体总管 · AutoResearch Overseer
 
 cd /d "d:\autoresearch\autoresearch_new"
 
-set PYTHON=D:\Python 3.12.0\python.exe
-if not exist "%PYTHON%" set PYTHON=python
+set "PYTHON=D:\Python 3.12.0\python.exe"
+if not exist "%PYTHON%" set "PYTHON=python"
 
 echo.
 echo  ╔══════════════════════════════════════════════╗

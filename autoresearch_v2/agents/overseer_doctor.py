@@ -53,9 +53,9 @@ MAX_CONSECUTIVE_FAILS = 3
 LLM_TIMEOUT = 120.0
 DOCTOR_LOG_FILE = os.path.join(PROJECT_ROOT, "doctor.log")
 
-STUCK_NO_EXPERIMENT_MINUTES = 20
-STUCK_NO_LOG_MINUTES = 8
-STUCK_CDS_STAGNANT_ROUNDS = 6
+STUCK_NO_EXPERIMENT_MINUTES = 30
+STUCK_NO_LOG_MINUTES = 15
+STUCK_CDS_STAGNANT_ROUNDS = 12
 OOM_TIER1_BATCH_MIN = 1
 MODEL_SIZES = ["yolo12n.pt", "yolo12s.pt", "yolo12m.pt", "yolo12l.pt", "yolo12x.pt"]
 
@@ -223,8 +223,9 @@ class ErrorDetector:
             if level in ("CRIT", "WARN") or self._is_error_line(line):
                 detected = self._classify_error(line, level)
                 if detected:
-                    error_key = detected["error_type"] + ":" + hashlib.md5(
-                        line.encode()).hexdigest()[:12]
+                    # 按 error_type 聚合计数，而不是按日志内容 hash
+                    # 避免同一类错误的不同日志行产生不同 key，导致重复报警不触发 escalate
+                    error_key = detected["error_type"]
                     if error_key not in self.seen_errors:
                         self.seen_errors[error_key] = {
                             "first_seen": datetime.now().isoformat(), "count": 0}
@@ -233,13 +234,19 @@ class ErrorDetector:
 
                     count = self.seen_errors[error_key]["count"]
                     attempt_count = self.fix_attempts.get(error_key, 0)
+                    # Also sum all fix_attempts keys that start with this error_type
+                    # (because record_fix_attempt uses error_type:md5 as key)
+                    for k, v in self.fix_attempts.items():
+                        if k.startswith(error_key + ":"):
+                            attempt_count = max(attempt_count, v)
 
                     if count > 1 and attempt_count >= MAX_CONSECUTIVE_FAILS:
                         detected["recommended_action"] = "escalate"
                         detected["confidence"] = 1.0
                         detected["root_cause"] = (
                             f"连续 {count} 次相同错误，"
-                            f"已尝试修复 {attempt_count} 次失败，升级人工")
+                            f"已尝试修复 {attempt_count} 次失败，升级人工"
+                        )
 
                     errors.append(detected)
         return errors
@@ -505,6 +512,10 @@ class FixExecutor:
         self.overseer_url = overseer_url.rstrip("/")
         self.train_script = TRAIN_SCRIPT
         self.project_root = PROJECT_ROOT
+        self._restart_history = []  # (timestamp, action, target)
+        self._max_restarts_per_10min = 10  # 10分钟内最多重启10次
+        self._cooling_down = False
+        self._cooldown_until = 0
 
     def execute(self, diagnosis: dict, error_info: dict) -> dict:
         action = diagnosis.get("recommended_action", "escalate")
@@ -512,6 +523,30 @@ class FixExecutor:
                                  diagnosis.get("target_agent", "Orchestrator"))
         result = {"action": action, "target": target,
                    "success": False, "message": "", "details": {}}
+
+        # Rate limiter: prevent infinite restart loops
+        if action in ("restart_agent", "restart_orchestrator", "restart_service",
+                       "retry_train", "retry_with_backoff", "retry_with_longer_timeout"):
+            now = time.time()
+            # Clean old history (>10 min)
+            self._restart_history = [(ts, a, t) for ts, a, t in self._restart_history
+                                      if now - ts < 600]
+            # Check if in cooldown
+            if self._cooling_down:
+                if now < self._cooldown_until:
+                    return {"action": action, "target": target, "success": False,
+                            "message": f"冷却中 ({int(self._cooldown_until - now)}s 剩余)，跳过重启"}
+                else:
+                    self._cooling_down = False
+            # Count recent restarts for same action
+            same_action_count = sum(1 for ts, a, t in self._restart_history if a == action)
+            if same_action_count >= self._max_restarts_per_10min:
+                log(f"10分钟内 {action} 已达 {same_action_count} 次，进入冷却 (5分钟)", "CRIT")
+                self._cooling_down = True
+                self._cooldown_until = now + 300
+                return {"action": "escalate", "target": target, "success": False,
+                        "message": f"{action} 过于频繁 ({same_action_count}次/10min)，已升级人工，进入5分钟冷却"}
+            self._restart_history.append((now, action, target))
 
         executor_map = {
             "batch_half": self._fix_batch_half,
@@ -597,7 +632,8 @@ class FixExecutor:
     def _agent_api(self, name: str, action: str) -> bool:
         try:
             import urllib.request
-            url = f"{self.overseer_url}/api/agent/{urllib.request.quote(name)}/{action}"
+            from urllib.parse import quote
+            url = f"{self.overseer_url}/api/agent/{quote(name)}/{action}"
             req = urllib.request.Request(url, method="POST")
             req.add_header("Accept", "application/json")
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -797,12 +833,34 @@ class FixExecutor:
                 return {"action": "restart_service", "target": target, "success": True,
                         "message": f"Ollama 已在线, 可用模型: {models}"}
         except Exception:
+            # Count how many times we've tried restarting Ollama recently
+            now = time.time()
+            recent_ollama_restarts = sum(
+                1 for ts, a, t in self._restart_history
+                if a == "restart_service" and now - ts < 600
+            )
+            if recent_ollama_restarts >= 3:
+                return {"action": "restart_service", "target": target, "success": False,
+                        "message": f"Ollama 已连续 {recent_ollama_restarts} 次重启失败，请手动启动 Ollama (ollama serve)"}
             log("restart_service: Ollama 不可达, 尝试重启...", "WARN")
             try:
-                subprocess.run(["ollama", "serve"], capture_output=True, timeout=10)
+                if sys.platform == "win32":
+                    subprocess.Popen(
+                        ["ollama", "serve"],
+                        creationflags=subprocess.DETACHED_PROCESS,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                else:
+                    subprocess.Popen(
+                        ["ollama", "serve"],
+                        start_new_session=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             except Exception:
                 pass
-            time.sleep(3)
+            time.sleep(5)
             try:
                 import urllib.request
                 req = urllib.request.Request("http://localhost:11434/api/tags")
@@ -1125,7 +1183,7 @@ class OverseerDoctor:
             log(f"本轮: 日志修复={log_fix_count} "
                 f"卡死修复={stuck_fix_count} "
                 f"策略调整={strategy_fix_count}", "FIX")
-        else:
+        elif status:
             exp_count = health.get("experiment_count", 0)
             best_cds = health.get("best_cds", 0)
             log(f"本轮无异常 | 实验: {exp_count} | CDS: {best_cds:.4f}", "OK")

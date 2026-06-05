@@ -2,6 +2,8 @@ import os
 import sys
 import struct
 import io
+import subprocess
+import math
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 BAT_PATH = os.path.join(REPO_ROOT, "start_all.bat")
@@ -88,7 +90,6 @@ def create_ico():
         gear_cy = cy - r * 0.38
         gear_r = r * 0.18
         num_teeth = 6
-        import math
         for tooth in range(num_teeth):
             angle = tooth * (2 * math.pi / num_teeth) - math.pi / 2
             tx_dot = gear_cx + math.cos(angle) * gear_r
@@ -113,8 +114,6 @@ def create_ico():
 
 
 def create_shortcut():
-    import subprocess
-
     desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
     lnk_path = os.path.join(desktop, "AutoResearch.lnk")
 
