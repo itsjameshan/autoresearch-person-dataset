@@ -266,23 +266,23 @@ function shortSha(s) {
 function refreshOverview() {
   safeFetch("/api/overview").then(d => {
     const best = d.best_metrics || {};
-    document.getElementById("best-cds").textContent = best.cds !== undefined ? best.cds.toFixed(4) : "—";
+    document.getElementById("best-cds").textContent = (best.cds !== undefined && best.cds !== null) ? best.cds.toFixed(4) : "—";
     document.getElementById("best-sha").textContent = best.run_id ? "run " + shortSha(best.run_id) : "";
     const tm = !!best.target_met;
     const tmEl = document.getElementById("target-met");
     tmEl.textContent = tm ? "PASS" : "—";
     tmEl.className = "value " + (tm ? "target-met-yes" : "target-met-no");
-    if (best.precision !== undefined) {
+    if (best.precision !== undefined && best.precision !== null && best.recall !== undefined && best.recall !== null) {
       document.getElementById("target-detail").textContent =
         "P=" + best.precision.toFixed(3) + " R=" + best.recall.toFixed(3);
     }
-    document.getElementById("exp-count").textContent = d.experiment_count;
+    document.getElementById("exp-count").textContent = d.experiment_count || 0;
     document.getElementById("iteration").textContent = d.iteration ? "iter " + d.iteration : "";
-    if (d.budget && d.budget.gpu_minutes_remaining !== null) {
+    if (d.budget && d.budget.gpu_minutes_remaining !== null && d.budget.gpu_minutes_remaining !== undefined) {
       const rem = d.budget.gpu_minutes_remaining;
       document.getElementById("budget-gpu").textContent = rem.toFixed(0) + " min";
       const dr = d.budget.dollars_remaining;
-      document.getElementById("budget-dollars").textContent = dr !== null ? "$" + dr.toFixed(2) + " left" : "";
+      document.getElementById("budget-dollars").textContent = (dr !== null && dr !== undefined) ? "$" + dr.toFixed(2) + " left" : "";
     } else {
       document.getElementById("budget-gpu").textContent = "—";
       document.getElementById("budget-dollars").textContent = "no budget set";
@@ -290,7 +290,8 @@ function refreshOverview() {
     document.getElementById("overview-updated").textContent = "updated " + nowStr();
   }).catch(e => {
     document.getElementById("best-cds").textContent = "err";
-    document.getElementById("overview-updated").textContent = "error " + nowStr();
+    document.getElementById("overview-updated").textContent = "error: " + String(e);
+    console.error("refreshOverview failed:", e);
   });
 }
 
@@ -366,10 +367,10 @@ function refreshExperiments() {
         return `<tr>
           <td><span class="sha">${escapeHtml(shortSha(r.run_id))}</span></td>
           <td class="${statusClass}">${escapeHtml(r.status || "")}</td>
-          <td class="num">${m.cds !== undefined ? m.cds.toFixed(4) : "—"}</td>
-          <td class="num">${m.precision !== undefined ? m.precision.toFixed(3) : "—"}</td>
-          <td class="num">${m.recall !== undefined ? m.recall.toFixed(3) : "—"}</td>
-          <td class="num">${r.gpu_minutes ? r.gpu_minutes.toFixed(1) : "—"}</td>
+          <td class="num">${(m.cds !== undefined && m.cds !== null) ? m.cds.toFixed(4) : "—"}</td>
+          <td class="num">${(m.precision !== undefined && m.precision !== null) ? m.precision.toFixed(3) : "—"}</td>
+          <td class="num">${(m.recall !== undefined && m.recall !== null) ? m.recall.toFixed(3) : "—"}</td>
+          <td class="num">${(r.gpu_minutes !== undefined && r.gpu_minutes !== null) ? r.gpu_minutes.toFixed(1) : "—"}</td>
           <td>${escapeHtml((r.description || "").slice(0, 80))}</td>
         </tr>`;
       }).join("") + "</tbody></table>";
@@ -662,11 +663,13 @@ def create_app(
         best = {}
         exp_count = 0
         iteration = 0
+        budget_info = {"exists": False, "period": budget_period}
         if state is not None:
             try:
                 best = state.get_best_metrics() or {}
                 exp_count = state.get_experiment_count()
                 iteration = exp_count  # close enough for display
+                budget_info = _budget_for_period(state, budget_period)
             except Exception as e:
                 return jsonify({"error": str(e)}), 200
             finally:
@@ -677,7 +680,7 @@ def create_app(
             "best_metrics": best,
             "experiment_count": exp_count,
             "iteration": iteration,
-            "budget": _budget_for_period(_state(), budget_period),
+            "budget": budget_info,
         })
 
     @app.get("/api/experiments")
