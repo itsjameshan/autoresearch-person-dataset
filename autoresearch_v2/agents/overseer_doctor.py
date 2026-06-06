@@ -315,8 +315,10 @@ class ErrorDetector:
     def record_fix_success(self, error_type: str, log_line: str):
         key = error_type + ":" + hashlib.md5(log_line.encode()).hexdigest()[:12]
         self.fix_attempts[key] = 0
-        if key in self.seen_errors:
-            self.seen_errors[key]["count"] = 0
+        # Reset the plain error_type key in seen_errors (which is how
+        # detect_errors indexes it) so the error count goes back to 0.
+        if error_type in self.seen_errors:
+            self.seen_errors[error_type]["count"] = 0
         if error_type == "cuda_oom":
             self.oom_tier = 0
 
@@ -687,8 +689,6 @@ class FixExecutor:
             return {"action": "switch_smaller_model", "target": target,
                     "success": False, "message": f"已是最小模型 {current_model}，无法继续缩小"}
         ok = self._write_train_param("MODEL", new_model)
-        self._write_train_param("BATCH", max(1, self._get_current_batch()))
-        self._write_train_param("IMGSZ", self._get_current_imgsz())
         log(f"switch_smaller_model: {current_model} → {new_model}", "STRATEGY")
         if ok:
             self._agent_api(target, "restart")

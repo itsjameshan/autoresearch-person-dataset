@@ -554,6 +554,7 @@ class Orchestrator:
 
             if not metrics:
                 log("评估失败", "CRIT")
+                self.budget.release_reserved(run_id)
                 self.consecutive_fails += 1
                 if self.consecutive_fails >= self.max_consecutive_fails:
                     break

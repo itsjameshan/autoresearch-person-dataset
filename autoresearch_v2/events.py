@@ -31,7 +31,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DEFAULT_EVENTS_PATH = "activity_events.jsonl"
+DEFAULT_EVENTS_PATH = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "activity_events.jsonl"
+))
 
 
 # ── Pretty-printer per event type ─────────────────────────────────────

@@ -185,7 +185,6 @@ class StateDB:
     def get_recent_experiments(self, n: int = 10) -> list[dict]:
         rows = self.conn.execute(
             """SELECT * FROM experiments
-               WHERE status IN ('completed', 'failed')
                ORDER BY started_at DESC LIMIT ?""",
             (n,)
         ).fetchall()

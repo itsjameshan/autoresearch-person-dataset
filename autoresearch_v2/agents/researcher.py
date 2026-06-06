@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from autoresearch_v2._json_extract import extract_first_json
+
 PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "..", "prompts", "researcher.md")
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -142,21 +144,9 @@ def _call_ollama(system_prompt: str, user_prompt: str,
 
 
 def _extract_json(text: str) -> Optional[dict]:
-    json_match = re.search(r'\{[\s\S]*\}', text)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-
-    code_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
-    if code_match:
-        try:
-            return json.loads(code_match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    return None
+    """Extract first balanced JSON object from LLM response text.
+    Delegates to the shared robust extractor in _json_extract.py."""
+    return extract_first_json(text)
 
 
 def _validate_decision(decision: dict) -> tuple[bool, list[str]]:

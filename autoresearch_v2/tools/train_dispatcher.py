@@ -8,6 +8,7 @@ train_dispatcher.py — 包装 train.py 的调度器
   - 记录结果到状态库
 """
 
+import ast
 import json
 import os
 import re
@@ -115,7 +116,7 @@ def read_current_config(train_script: str = TRAIN_SCRIPT) -> dict:
                     val_str = m.group(2).strip()
                     if key.isupper() and len(key) > 1:
                         try:
-                            val = eval(val_str)
+                            val = ast.literal_eval(val_str)
                         except Exception:
                             val = val_str
                         config[key] = val

@@ -35,7 +35,7 @@ def run_evaluate(model_path: str, data_yaml: str, imgsz: int = 1280) -> Optional
         print(f"eval_dispatcher: evaluation failed: {e}", file=sys.stderr)
         return None
     finally:
-        if EVAL_SCRIPT_DIR in sys.path:
+        while EVAL_SCRIPT_DIR in sys.path:
             sys.path.remove(EVAL_SCRIPT_DIR)
 
 
