@@ -50,6 +50,9 @@ MAX_CONSECUTIVE_FAILS = 3
 STAGNATION_WINDOW = 5
 STAGNATION_MIN_DELTA = 0.005
 COOLDOWN_SEC = 30
+# Overfitting detection threshold
+OVERFITTING_GAP_THRESHOLD = 0.05
+OVERFITTING_ACTION_THRESHOLD = 0.08
 
 DEFAULT_DATA_YAML = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "person_dataset", "person.yaml"
@@ -139,6 +142,8 @@ class Orchestrator:
         self.stagnation_min_delta = config.get("stagnation_min_delta", STAGNATION_MIN_DELTA)
         self.cooldown_sec = config.get("cooldown_sec", COOLDOWN_SEC)
         self.max_iterations = config.get("max_iterations", 50)
+        self.overfitting_gap_threshold = config.get("overfitting_gap_threshold", OVERFITTING_GAP_THRESHOLD)
+        self.overfitting_action_threshold = config.get("overfitting_action_threshold", OVERFITTING_ACTION_THRESHOLD)
         # Default to auto-approve HITL so long-running loops don't block.
         self.auto_approve_hitl = bool(config.get("auto_approve_hitl", True))
         self.data_yaml = config.get("data_yaml", DEFAULT_DATA_YAML)
@@ -561,17 +566,47 @@ class Orchestrator:
                 continue
 
             cds = metrics.get("cds", 0)
+            val_test_gap = metrics.get("val_test_gap", 0.0)
+            overfitting_detected = metrics.get("overfitting_detected", False)
+            
             log(f"评估结果: CDS={cds:.4f} | mAP50={metrics.get('mAP50',0):.4f} "
                 f"| P={metrics.get('precision',0):.4f} | R={metrics.get('recall',0):.4f}")
+            
+            if "test_counting_acc" in metrics:
+                log(f"测试集结果: counting_acc={metrics.get('test_counting_acc',0):.4f} "
+                    f"| small_obj_recall={metrics.get('test_small_obj_recall',0):.4f} "
+                    f"| Val-Test Gap={val_test_gap:.4f}")
 
             self.events.emit("eval_complete", run_id=run_id, metrics=metrics)
+
+            # Overfitting detection and handling
+            if overfitting_detected or val_test_gap > self.overfitting_action_threshold:
+                log(f"⚠️ 检测到严重过拟合! Val-Test Gap={val_test_gap:.4f}", "WARN")
+                self.events.emit(
+                    "overfitting_detected",
+                    run_id=run_id,
+                    val_test_gap=val_test_gap,
+                    action="trigger_action",
+                )
+                
+                # Trigger Curator analysis immediately for overfitting
+                if fp_fn_data:
+                    log("触发 Curator 分析过拟合问题...", "AGENT")
+                    try:
+                        curator_report = self.curator.analyze(fp_fn_data, run_id)
+                        if curator_report.get("worst_failure_modes"):
+                            for fm in curator_report["worst_failure_modes"][:3]:
+                                log(f"  Curator发现: {fm.get('pattern', '')} "
+                                    f"(影响: {fm.get('estimated_impact', '')})", "SUGGEST")
+                    except Exception as e:
+                        log(f"Curator分析失败: {e}", "WARN")
 
             self._git_commit(
                 run_id=run_id,
                 iteration=self.iteration,
                 context="TRAIN",
                 metrics=metrics,
-                extra_detail="",
+                extra_detail=f"overfitting={overfitting_detected}, val_test_gap={val_test_gap:.4f}" if overfitting_detected else "",
             )
 
             gates_pass, gates_msg = self._check_quality_gates(metrics)
@@ -758,6 +793,10 @@ def main():
                         help="禁用自动审批，改为人工审批")
     parser.add_argument("--skip-dataset-gate", action="store_true",
                         help="跳过启动前的数据质量检查")
+    parser.add_argument("--overfitting-gap", type=float, default=OVERFITTING_GAP_THRESHOLD,
+                        help="过拟合检测阈值 (val-test gap)")
+    parser.add_argument("--overfitting-action", type=float, default=OVERFITTING_ACTION_THRESHOLD,
+                        help="触发过拟合处理的阈值")
     args = parser.parse_args()
 
     config = {
@@ -774,6 +813,8 @@ def main():
         "cooldown_sec": args.cooldown,
         "auto_approve_hitl": not args.manual_hitl,
         "dataset_gate_enabled": not args.skip_dataset_gate,
+        "overfitting_gap_threshold": args.overfitting_gap,
+        "overfitting_action_threshold": args.overfitting_action,
     }
 
     if args.config:

@@ -212,10 +212,104 @@ def match_predictions_to_gt(pred_boxes, gt_boxes, iou_thresh=0.5):
     return len(matched_gt)
 
 
+def _evaluate_on_split(model, data_dir, split_name, data_cfg, imgsz, deploy_conf, deploy_iou_nms):
+    """Evaluate model on a specific dataset split (train/val/test)."""
+    img_rel = data_cfg.get(split_name, f"images/{split_name}")
+    if os.path.isabs(img_rel):
+        img_dir = Path(img_rel)
+    else:
+        img_dir = data_dir / img_rel
+
+    label_dir = Path(str(img_dir).replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep))
+
+    images = sorted(glob.glob(str(img_dir / "*.JPG")) +
+                    glob.glob(str(img_dir / "*.jpg")) +
+                    glob.glob(str(img_dir / "*.png")))
+
+    if not images:
+        print(f"evaluate: no {split_name} images found in {img_dir}")
+        return None
+
+    per_image_accs = []
+    counting_errors = []
+    small_gt_total = 0
+    small_gt_matched = 0
+    pred_boxes_all = []
+    gt_boxes_all = []
+
+    print(f"evaluate: running {split_name} evaluation on {len(images)} images...")
+    for i, img_path in enumerate(images):
+        img_name = Path(img_path).stem
+        label_path = label_dir / f"{img_name}.txt"
+
+        gt_boxes, gt_areas = load_gt_boxes(str(label_path), imgsz, imgsz)
+        gt_count = len(gt_boxes)
+
+        results = model(
+            img_path,
+            conf=deploy_conf,
+            iou=deploy_iou_nms,
+            imgsz=imgsz,
+            device=0,
+            verbose=False,
+        )
+        res = results[0]
+
+        if res.boxes is not None and len(res.boxes) > 0:
+            pred_boxes = res.boxes.xyxy.cpu().numpy().tolist()
+            pred_count = len(pred_boxes)
+        else:
+            pred_boxes = []
+            pred_count = 0
+
+        if gt_count > 0:
+            acc = max(0, 1 - abs(pred_count - gt_count) / gt_count)
+        else:
+            acc = 1.0 if pred_count == 0 else 0.0
+        per_image_accs.append(acc)
+        counting_errors.append(abs(pred_count - gt_count))
+
+        for gi, area in enumerate(gt_areas):
+            if area < SMALL_OBJ_AREA_THRESH:
+                small_gt_total += 1
+                best_iou = 0
+                for pb in pred_boxes:
+                    iou = compute_iou(pb, gt_boxes[gi])
+                    best_iou = max(best_iou, iou)
+                if best_iou >= 0.5:
+                    small_gt_matched += 1
+
+        pred_boxes_all.extend(pred_boxes)
+        gt_boxes_all.extend(gt_boxes)
+
+        if (i + 1) % 100 == 0:
+            print(f"  processed {i + 1}/{len(images)} {split_name} images...")
+
+    counting_accuracy = float(np.mean(per_image_accs)) if per_image_accs else 0.0
+    counting_mae = float(np.mean(counting_errors)) if counting_errors else 0.0
+    small_obj_recall = small_gt_matched / max(small_gt_total, 1)
+
+    matched = match_predictions_to_gt(pred_boxes_all, gt_boxes_all)
+    precision_split = matched / max(len(pred_boxes_all), 1)
+    recall_split = matched / max(len(gt_boxes_all), 1)
+
+    return {
+        "counting_acc": counting_accuracy,
+        "counting_mae": counting_mae,
+        "small_obj_recall": small_obj_recall,
+        "precision": precision_split,
+        "recall": recall_split,
+        "n_images": len(images),
+        "n_gt_boxes": len(gt_boxes_all),
+        "n_pred_boxes": len(pred_boxes_all),
+    }
+
+
 def evaluate_model(model_path, data_yaml, imgsz=1280):
     """Main evaluation function. Returns dict of all metrics.
 
     This is the single source of truth for the autoresearch loop.
+    Now includes test set evaluation to prevent overfitting.
     """
     # ── Watchdog: hard-kill if anything below hangs ──
     _watchdog = _start_eval_watchdog()
@@ -247,92 +341,34 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     # F1 optimal
     f1_optimal = 2 * precision * recall / (precision + recall + 1e-6)
 
-    # ── Counting accuracy & small object recall ──
-    # Need to iterate val images with deployment thresholds
+    # ── Load data config ──
     data_dir = Path(data_yaml).parent
-    # Try to resolve paths from yaml
     import yaml
     with open(data_yaml, "r", encoding="utf-8", errors="replace") as f:
         data_cfg = yaml.safe_load(f)
 
-    # Resolve val image/label dirs
+    # ── Evaluate on val set (for training loop) ──
+    val_metrics = _evaluate_on_split(model, data_dir, "val", data_cfg, imgsz, deploy_conf, deploy_iou_nms)
+
+    # ── Evaluate on test set (for overfitting detection) ──
+    test_metrics = _evaluate_on_split(model, data_dir, "test", data_cfg, imgsz, deploy_conf, deploy_iou_nms)
+
+    # Use val metrics for primary evaluation
+    counting_accuracy = val_metrics["counting_acc"] if val_metrics else 0.0
+    counting_mae = val_metrics["counting_mae"] if val_metrics else 0.0
+    small_obj_recall = val_metrics["small_obj_recall"] if val_metrics else 0.0
+
+    # ── Inference timing ──
     val_img_rel = data_cfg.get("val", "images/val")
-    if os.path.isabs(val_img_rel):
-        val_img_dir = Path(val_img_rel)
-    else:
-        val_img_dir = data_dir / val_img_rel
-
-    # Derive label dir from image dir
-    val_label_dir = Path(str(val_img_dir).replace(os.sep + "images" + os.sep, os.sep + "labels" + os.sep))
-
+    val_img_dir = Path(val_img_rel) if os.path.isabs(val_img_rel) else data_dir / val_img_rel
     val_images = sorted(glob.glob(str(val_img_dir / "*.JPG")) +
                         glob.glob(str(val_img_dir / "*.jpg")) +
                         glob.glob(str(val_img_dir / "*.png")))
 
-    per_image_accs = []
-    counting_errors = []
-    small_gt_total = 0
-    small_gt_matched = 0
-
-    print(f"evaluate: running deployment-threshold inference on {len(val_images)} val images...")
-    for i, img_path in enumerate(val_images):
-        img_name = Path(img_path).stem
-        label_path = val_label_dir / f"{img_name}.txt"
-
-        gt_boxes, gt_areas = load_gt_boxes(str(label_path), imgsz, imgsz)
-        gt_count = len(gt_boxes)
-
-        # Run inference with deployment thresholds (single pass per image)
-        results = model(
-            img_path,
-            conf=deploy_conf,
-            iou=deploy_iou_nms,
-            imgsz=imgsz,
-            device=0,
-            verbose=False,
-        )
-        res = results[0]
-
-        if res.boxes is not None and len(res.boxes) > 0:
-            pred_boxes = res.boxes.xyxy.cpu().numpy().tolist()
-            pred_count = len(pred_boxes)
-        else:
-            pred_boxes = []
-            pred_count = 0
-
-        # Counting accuracy per image
-        if gt_count > 0:
-            acc = max(0, 1 - abs(pred_count - gt_count) / gt_count)
-        else:
-            acc = 1.0 if pred_count == 0 else 0.0
-        per_image_accs.append(acc)
-        counting_errors.append(abs(pred_count - gt_count))
-
-        # Small object recall
-        for gi, area in enumerate(gt_areas):
-            if area < SMALL_OBJ_AREA_THRESH:
-                small_gt_total += 1
-                best_iou = 0
-                for pb in pred_boxes:
-                    iou = compute_iou(pb, gt_boxes[gi])
-                    best_iou = max(best_iou, iou)
-                if best_iou >= 0.5:
-                    small_gt_matched += 1
-
-        if (i + 1) % 100 == 0:
-            print(f"  processed {i + 1}/{len(val_images)} images...")
-
-    counting_accuracy = float(np.mean(per_image_accs)) if per_image_accs else 0.0
-    counting_mae = float(np.mean(counting_errors)) if counting_errors else 0.0
-    small_obj_recall = small_gt_matched / max(small_gt_total, 1)
-
-    # ── Inference timing ──
     timing_imgs = val_images[:WARMUP_IMAGES + TIMING_IMAGES]
-    # Warmup
     for img in timing_imgs[:WARMUP_IMAGES]:
         model(img, conf=deploy_conf, iou=deploy_iou_nms, imgsz=imgsz,
               device=0, verbose=False)
-    # Timed runs
     times = []
     for img in timing_imgs[WARMUP_IMAGES:]:
         t0 = time.time()
@@ -350,7 +386,7 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
 
     # ── Mean confidence of detections ──
     all_confs = []
-    for img_path in val_images[:50]:  # Sample 50 images for speed
+    for img_path in val_images[:50]:
         results = model(img_path, conf=deploy_conf, iou=deploy_iou_nms,
                         imgsz=imgsz, device=0, verbose=False)
         if results[0].boxes is not None and len(results[0].boxes) > 0:
@@ -394,6 +430,30 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
     except Exception:
         pass
 
+    # ── Overfitting detection ──
+    overfitting_detected = False
+    val_test_gap = 0.0
+    if val_metrics and test_metrics:
+        val_cds = (W_MAP50 * mAP50 +
+                   W_MAP50_95 * mAP50_95 +
+                   W_F1 * (2 * val_metrics["precision"] * val_metrics["recall"] / 
+                           (val_metrics["precision"] + val_metrics["recall"] + 1e-6)) +
+                   W_COUNTING * val_metrics["counting_acc"] +
+                   W_SMALL_OBJ * val_metrics["small_obj_recall"])
+        
+        test_cds = (W_MAP50 * mAP50 +
+                    W_MAP50_95 * mAP50_95 +
+                    W_F1 * (2 * test_metrics["precision"] * test_metrics["recall"] / 
+                            (test_metrics["precision"] + test_metrics["recall"] + 1e-6)) +
+                    W_COUNTING * test_metrics["counting_acc"] +
+                    W_SMALL_OBJ * test_metrics["small_obj_recall"])
+        
+        val_test_gap = val_cds - test_cds
+        
+        if val_test_gap > 0.05:
+            overfitting_detected = True
+            print(f"evaluate: WARNING - Overfitting detected! Val CDS - Test CDS = {val_test_gap:.4f}")
+
     metrics = {
         "cds": round(cds, 4),
         "mAP50": round(mAP50, 4),
@@ -415,6 +475,15 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         "latency_gate": latency_gate,
         "latency_gate_ms": round(gate_ms, 1),
         "target_met": target_met,
+        # Test set metrics
+        "test_counting_acc": round(test_metrics["counting_acc"], 4) if test_metrics else None,
+        "test_counting_mae": round(test_metrics["counting_mae"], 4) if test_metrics else None,
+        "test_small_obj_recall": round(test_metrics["small_obj_recall"], 4) if test_metrics else None,
+        "test_precision": round(test_metrics["precision"], 4) if test_metrics else None,
+        "test_recall": round(test_metrics["recall"], 4) if test_metrics else None,
+        "test_n_images": test_metrics["n_images"] if test_metrics else 0,
+        "val_test_gap": round(val_test_gap, 4),
+        "overfitting_detected": overfitting_detected,
     }
 
     # ── Persist metrics to JSON for robust downstream parsing ──
@@ -452,6 +521,17 @@ def print_metrics(metrics, epochs_completed=0):
     print(f"recall_gate:      {metrics['recall_gate']}")
     print(f"latency_gate:     {metrics['latency_gate']}")
     print(f"latency_gate_ms:  {metrics['latency_gate_ms']}")
+    # Test set metrics
+    if metrics.get("test_counting_acc") is not None:
+        print("---test---")
+        print(f"test_counting_acc:      {metrics['test_counting_acc']:.4f}")
+        print(f"test_counting_mae:      {metrics['test_counting_mae']:.4f}")
+        print(f"test_small_obj_recall:  {metrics['test_small_obj_recall']:.4f}")
+        print(f"test_precision:         {metrics['test_precision']:.4f}")
+        print(f"test_recall:            {metrics['test_recall']:.4f}")
+        print(f"test_n_images:          {metrics['test_n_images']}")
+        print(f"val_test_gap:           {metrics['val_test_gap']:.4f}")
+        print(f"overfitting_detected:   {metrics['overfitting_detected']}")
 
 
 def evaluate_pipeline(model_path, large_images_dir, imgsz=1280, overlap=200, nms_iou=0.35):
