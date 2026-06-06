@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-06-06T16:19:29.668990",
-  "total_fixes": 1688,
-  "successful_fixes": 1508,
-  "escalated_count": 11,
-  "stuck_fixes": 19,
-  "strategy_changes": 133,
+  "timestamp": "2026-06-06T16:37:00.463885",
+  "total_fixes": 168,
+  "successful_fixes": 138,
+  "escalated_count": 1,
+  "stuck_fixes": 0,
+  "strategy_changes": 6,
   "oom_tier": 0,
-  "last_experiment_count": 177868,
+  "last_experiment_count": 177956,
   "last_cds": 0.4772
 }

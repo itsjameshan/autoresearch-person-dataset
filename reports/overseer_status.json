@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-06-06T16:19:28.466812",
-  "uptime": "2h52m31s",
+  "timestamp": "2026-06-06T16:35:28.612294",
+  "uptime": "3h08m31s",
   "agents": [
     {
       "name": "Orchestrator",
       "role": "主战斗群: Researcher + Curator + Triage 一体化闭环",
       "severity": "critical",
-      "status": "stopped",
-      "pid": 26692,
+      "status": "running",
+      "pid": 17904,
       "restart_count": 0,
-      "uptime_sec": 0,
-      "uptime": "0h00m00s",
+      "uptime_sec": 84,
+      "uptime": "0h01m24s",
       "last_error": ""
     },
     {
@@ -20,8 +20,8 @@
       "status": "running",
       "pid": 24764,
       "restart_count": 0,
-      "uptime_sec": 6416,
-      "uptime": "1h46m56s",
+      "uptime_sec": 7376,
+      "uptime": "2h02m56s",
       "last_error": ""
     },
     {
@@ -29,10 +29,10 @@
       "role": "架构合规监督: 32条架构规则持续审计",
       "severity": "warning",
       "status": "running",
-      "pid": 24300,
+      "pid": 28252,
       "restart_count": 0,
-      "uptime_sec": 10357,
-      "uptime": "2h52m37s",
+      "uptime_sec": 634,
+      "uptime": "0h10m34s",
       "last_error": ""
     },
     {
@@ -40,10 +40,10 @@
       "role": "总管诊断医生: 实时监控 Web UI 日志 + 自动修复 error/bug + 卡死重启 + 策略调整",
       "severity": "critical",
       "status": "running",
-      "pid": 17900,
+      "pid": 26700,
       "restart_count": 0,
-      "uptime_sec": 10355,
-      "uptime": "2h52m35s",
+      "uptime_sec": 633,
+      "uptime": "0h10m33s",
       "last_error": ""
     },
     {
@@ -51,15 +51,15 @@
       "role": "v2 只读仪表盘: 实验详情 / 决策记录 / FP-FN 分析 (端口 5052)",
       "severity": "info",
       "status": "running",
-      "pid": 21660,
+      "pid": 18944,
       "restart_count": 0,
-      "uptime_sec": 10353,
-      "uptime": "2h52m33s",
+      "uptime_sec": 633,
+      "uptime": "0h10m33s",
       "last_error": ""
     }
   ],
   "best_cds": 0.4772,
-  "experiment_count": 177907,
+  "experiment_count": 177956,
   "target_cds": 0.85,
   "goal_met": false
 }
