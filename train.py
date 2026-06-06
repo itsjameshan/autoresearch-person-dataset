@@ -13,7 +13,7 @@ DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
 IMGSZ = 640
 EPOCHS = 2
 
-BATCH = 28
+BATCH = 14
 import torch
 
 # Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
@@ -44,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.006177430943619523
+LR0 = 0.00104014993172276
 LRF = 0.0002
 HSV_H = 0.015
 HSV_S = 0.7
@@ -54,13 +54,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.3681521095156265
+MOSAIC = 0.6924629596341468
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 10.197112905315404
+BOX = 19.480069190981823
 CLS = 1.0
 
 CONF = 0.001
