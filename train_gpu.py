@@ -30,7 +30,28 @@ IMGSZ = 1280
 EPOCHS = 100
 
 BATCH = 16
-DEVICE = 0
+
+# Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
+def _get_compatible_device():
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Training requires a GPU. "
+            "Please install a CUDA-capable PyTorch version."
+        )
+    cc = torch.cuda.get_device_capability()
+    major, minor = cc
+    compute_capability = major * 10 + minor  # e.g. (8,6) -> 86
+    # Check PyTorch CUDA version to determine max supported CC
+    pt_cuda_ver = float(torch.version.cuda) if torch.version.cuda else 0.0
+    max_supported_cc = 90 if pt_cuda_ver < 13.0 else 120
+    if compute_capability > max_supported_cc:
+        raise RuntimeError(
+            f"GPU CC {major}.{minor} (sm_{compute_capability}) exceeds PyTorch max supported CC {max_supported_cc}. "
+            f"Training stopped. To use GPU, install PyTorch with CUDA 13.x or newer."
+        )
+    return 0
+
+DEVICE = _get_compatible_device()
 AMP = True
 CACHE = "ram"
 WORKERS = 8

@@ -290,6 +290,7 @@ function refreshOverview() {
     document.getElementById("overview-updated").textContent = "updated " + nowStr();
   }).catch(e => {
     document.getElementById("best-cds").textContent = "err";
+    document.getElementById("overview-updated").textContent = "error " + nowStr();
   });
 }
 
@@ -338,6 +339,10 @@ function refreshEvents() {
     if (events.length) {
       lastEventTs = events[events.length - 1].ts || lastEventTs;
     }
+  }).catch(err => {
+    const el = document.getElementById("events");
+    el.innerHTML = '<div class="err">Failed to load events: ' + escapeHtml(String(err)) + '</div>';
+    document.getElementById("events-count").textContent = "err";
   });
 }
 
@@ -368,6 +373,8 @@ function refreshExperiments() {
           <td>${escapeHtml((r.description || "").slice(0, 80))}</td>
         </tr>`;
       }).join("") + "</tbody></table>";
+  }).catch(err => {
+    document.getElementById("experiments").innerHTML = '<div class="err">Failed to load experiments: ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -385,6 +392,8 @@ function refreshDecisions() {
         <td>${escapeHtml((r.rationale || "").slice(0, 100))}</td>
         <td><span class="sha">${escapeHtml(shortSha(r.run_id))}</span></td>
       </tr>`).join("") + "</tbody></table>";
+  }).catch(err => {
+    document.getElementById("decisions").innerHTML = '<div class="err">Failed to load decisions: ' + escapeHtml(String(err)) + '</div>';
   });
 }
 

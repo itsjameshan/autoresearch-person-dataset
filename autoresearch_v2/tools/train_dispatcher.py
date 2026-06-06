@@ -147,9 +147,24 @@ def run_training(train_script: str = TRAIN_SCRIPT,
     try:
         import torch
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            cc = torch.cuda.get_device_capability()
+            compute_capability = cc[0] * 10 + cc[1]
+            pt_cuda_ver = float(torch.version.cuda) if torch.version.cuda else 0.0
+            max_supported_cc = 90 if pt_cuda_ver < 13.0 else 120
+            if compute_capability > max_supported_cc:
+                raise RuntimeError(
+                    f"GPU CC {cc[0]}.{cc[1]} (sm_{compute_capability}) exceeds PyTorch max supported CC {max_supported_cc}. "
+                    f"Training stopped. To use GPU, install PyTorch with CUDA 13.x or newer."
+                )
+            else:
+                torch.cuda.empty_cache()
+        else:
+            raise RuntimeError(
+                "CUDA is not available. Training requires a GPU. "
+                "Please install a CUDA-capable PyTorch version."
+            )
     except ImportError:
-        pass
+        raise RuntimeError("PyTorch is not installed. Please install PyTorch with CUDA support.")
 
     proc = subprocess.Popen(
         [python, "-u", train_script],

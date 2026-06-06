@@ -14,7 +14,29 @@ IMGSZ = 640
 EPOCHS = 2
 
 BATCH = 1
-DEVICE = "cpu"
+import torch
+
+# Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
+def _get_compatible_device():
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Training requires a GPU. "
+            "Please install a CUDA-capable PyTorch version."
+        )
+    cc = torch.cuda.get_device_capability()
+    major, minor = cc
+    compute_capability = major * 10 + minor  # e.g. (8,6) -> 86
+    # Check PyTorch CUDA version to determine max supported CC
+    pt_cuda_ver = float(torch.version.cuda) if torch.version.cuda else 0.0
+    max_supported_cc = 90 if pt_cuda_ver < 13.0 else 120
+    if compute_capability > max_supported_cc:
+        raise RuntimeError(
+            f"GPU CC {major}.{minor} (sm_{compute_capability}) exceeds PyTorch max supported CC {max_supported_cc}. "
+            f"Training stopped. To use GPU, install PyTorch with CUDA 13.x or newer."
+        )
+    return 0
+
+DEVICE = _get_compatible_device()
 AMP = False
 CACHE = "disk"
 WORKERS = 4
@@ -22,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.0030710573677773722
+LR0 = 0.006177430943619523
 LRF = 0.0002
 HSV_H = 0.015
 HSV_S = 0.7
@@ -32,13 +54,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.8123957592679836
+MOSAIC = 0.3681521095156265
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 19.260714596148745
+BOX = 10.197112905315404
 CLS = 1.0
 
 CONF = 0.001
@@ -121,4 +143,5 @@ if __name__ == "__main__":
     try:
         torch.cuda.empty_cache()
     except:
-        pass
+        passLLM_BACKEND = "ollama"
+LLM_BACKEND = "ollama"

@@ -23,24 +23,48 @@ def load_config(config_path):
     spec.loader.exec_module(config)
     return config
 
+# Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
+def _get_compatible_device(preferred_device):
+    if preferred_device == "cpu":
+        return "cpu"
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Training requires a GPU. "
+            "Please install a CUDA-capable PyTorch version."
+        )
+    cc = torch.cuda.get_device_capability()
+    major, minor = cc
+    compute_capability = major * 10 + minor  # e.g. (8,6) -> 86
+    # Check PyTorch CUDA version to determine max supported CC
+    pt_cuda_ver = float(torch.version.cuda) if torch.version.cuda else 0.0
+    max_supported_cc = 90 if pt_cuda_ver < 13.0 else 120
+    if compute_capability > max_supported_cc:
+        raise RuntimeError(
+            f"GPU CC {major}.{minor} (sm_{compute_capability}) exceeds PyTorch max supported CC {max_supported_cc}. "
+            f"Training stopped. To use GPU, install PyTorch with CUDA 13.x or newer."
+        )
+    return preferred_device
+
 def train(config):
     _repo_root = os.path.dirname(os.path.abspath(__file__))
-    
+
     def _abs(rel_or_abs):
         if os.path.isabs(rel_or_abs):
             return os.path.normpath(rel_or_abs)
         return os.path.normpath(os.path.join(_repo_root, rel_or_abs))
-    
+
     model_path = _abs(config.MODEL)
     data_yaml = _abs(config.DATA_YAML)
     model = YOLO(model_path)
-    
+
+    device = _get_compatible_device(getattr(config, "DEVICE", 0))
+
     results = model.train(
         data=data_yaml,
         epochs=config.EPOCHS,
         imgsz=config.IMGSZ,
         batch=config.BATCH,
-        device=config.DEVICE,
+        device=device,
         patience=config.PATIENCE,
         project=config.PROJECT,
         name=config.NAME,
