@@ -9,7 +9,7 @@
   "counting_acc": 0.7999,
   "counting_mae": 3.9102,
   "mean_confidence": 0.5055,
-  "inference_ms": 13.9,
+  "inference_ms": 16.7,
   "latency_score": 1.0,
   "peak_memory_mb": 6053.1,
   "deploy_conf": 0.2,
