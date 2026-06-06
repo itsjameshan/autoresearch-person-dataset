@@ -13,7 +13,7 @@ DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
 IMGSZ = 640
 EPOCHS = 2
 
-BATCH = 13
+BATCH = 18
 import torch
 
 # Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
@@ -44,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.0018027938903629125
+LR0 = 0.019096710410386616
 LRF = 0.0002
 HSV_H = 0.015
 HSV_S = 0.7
@@ -54,13 +54,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.9539525886999096
+MOSAIC = 0.9303804406734266
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 5.067864646577597
+BOX = 11.153306338839647
 CLS = 1.0
 
 CONF = 0.001
@@ -83,7 +83,7 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-imgsz = 768
+imgsz = 275
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
