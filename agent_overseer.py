@@ -1201,6 +1201,26 @@ def main():
                         help="禁用自动审批，改为人工审批")
     args = parser.parse_args()
 
+    # ── Check if already running ──────────────────────────────────
+    _check_url = f"http://127.0.0.1:{args.web_port}/api/health"
+    try:
+        import urllib.request
+        urllib.request.urlopen(_check_url, timeout=2)
+        # Already running — just open browser and exit
+        print(f"智能体总管已在运行中！({_check_url})")
+        print("正在打开浏览器...")
+        import webbrowser
+        webbrowser.open(f"http://127.0.0.1:{args.web_port}/")
+        print("浏览器已打开。按任意键关闭此窗口...")
+        try:
+            import msvcrt
+            msvcrt.getch()
+        except Exception:
+            input()
+        sys.exit(0)
+    except Exception:
+        pass  # Not running, continue launching
+
     config = {
         "target_cds": args.target_cds,
         "max_hours": args.max_hours,
