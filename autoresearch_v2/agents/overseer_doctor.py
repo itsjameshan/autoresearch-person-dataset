@@ -658,6 +658,12 @@ class FixExecutor:
     def _fix_batch_half(self, diagnosis, error_info, target) -> dict:
         current_batch = self._get_current_batch()
         new_batch = max(OOM_TIER1_BATCH_MIN, current_batch // 2)
+        if new_batch == current_batch:
+            log(f"batch_half: BATCH 已是最小值 {current_batch}，无法再降，升级到 reduce_imgsz", "WARN")
+            return {"action": "batch_half", "target": target, "success": False,
+                    "message": f"BATCH 已是最小值 {current_batch}，无法再降",
+                    "details": {"old_batch": current_batch, "new_batch": current_batch,
+                                "escalate_to": "reduce_imgsz"}}
         ok = self._write_train_param("BATCH", new_batch)
         log(f"batch_half: BATCH {current_batch} → {new_batch}", "FIX")
         if ok:
@@ -669,6 +675,12 @@ class FixExecutor:
     def _fix_reduce_imgsz(self, diagnosis, error_info, target) -> dict:
         current_imgsz = self._get_current_imgsz()
         new_imgsz = max(640, current_imgsz - 320)
+        if new_imgsz == current_imgsz:
+            log(f"reduce_imgsz: IMGSZ 已是最小值 {current_imgsz}，无法再降，升级到 switch_smaller_model", "WARN")
+            return {"action": "reduce_imgsz", "target": target, "success": False,
+                    "message": f"IMGSZ 已是最小值 {current_imgsz}，无法再降",
+                    "details": {"old_imgsz": current_imgsz, "new_imgsz": current_imgsz,
+                                "escalate_to": "switch_smaller_model"}}
         ok = self._write_train_param("IMGSZ", new_imgsz)
         log(f"reduce_imgsz: IMGSZ {current_imgsz} → {new_imgsz}", "FIX")
         if ok:

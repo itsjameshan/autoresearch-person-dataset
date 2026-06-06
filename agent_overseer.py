@@ -19,7 +19,8 @@ agent_overseer.py — 智能体总管 (v2 — 内置 Web UI)
   ├── 主战斗群：Orchestrator (Researcher + Curator + Triage 一体化)
   ├── 监督团队：SupervisorAgent (监控 + 审计 + 硬件安全 + 异常检测)
   ├── 合规团队：ArchitectureSupervisorAgent (架构合规检查)
-  ├── 诊断医生：OverseerDoctor (实时监控日志 + 自动修复错误)
+  ├── 诊断医生：OverseerDoctor (实时监控日志 + 初级自动修复)
+  ├── Bug修复专家：BugFixerAgent (消费 Doctor 修复失败的记录 + 深度修复)
   ├── 可视化(可选)：v2 Dashboard (只读仪表盘，端口 5052)
   └── 总管自带 Web UI：实时状态 + 日志 + 控制面板
 """
@@ -664,6 +665,7 @@ class AgentOverseer:
         self.enable_supervisor = config.get("enable_supervisor", True)
         self.enable_arch_supervisor = config.get("enable_arch_supervisor", True)
         self.enable_doctor = config.get("enable_doctor", True)
+        self.enable_bug_fixer = config.get("enable_bug_fixer", True)
         self.auto_approve_hitl = config.get("auto_approve_hitl", True)
         self.data_yaml = config.get("data_yaml", os.path.join(PROJECT_ROOT, "person_dataset", "person.yaml"))
         self.imgsz = config.get("imgsz", 1280)
@@ -739,8 +741,24 @@ class AgentOverseer:
             ]
             self.agents.append(ManagedAgent(
                 name="OverseerDoctor",
-                role="总管诊断医生: 实时监控 Web UI 日志 + 自动修复 error/bug + 卡死重启 + 策略调整",
+                role="总管诊断医生: 实时监控 Web UI 日志 + 初级自动修复 error/bug + 卡死重启 + 策略调整",
                 cmd=doctor_cmd,
+                severity="critical",
+            ))
+
+        if self.enable_bug_fixer:
+            bugfixer_cmd = [
+                PYTHON, "-u", "-m", "autoresearch_v2.agents.bug_fixer",
+                "--watch",
+                "--overseer-url", f"http://127.0.0.1:{self.web_port}",
+                "--interval", "15",
+                "--llm-backend", self.llm_backend,
+                "--ollama-model", self.ollama_model,
+            ]
+            self.agents.append(ManagedAgent(
+                name="BugFixerAgent",
+                role="Bug修复专家: 消费 OverseerDoctor 修复失败的记录 + 深度修复 (改源码/修DB/杀僵尸/打破死循环)",
+                cmd=bugfixer_cmd,
                 severity="critical",
             ))
 
@@ -1197,6 +1215,8 @@ def main():
                         help="不启动 ArchitectureSupervisor")
     parser.add_argument("--no-doctor", action="store_true",
                         help="不启动 OverseerDoctor (总管诊断医生)")
+    parser.add_argument("--no-bug-fixer", action="store_true",
+                        help="不启动 BugFixerAgent (Bug修复专家)")
     parser.add_argument("--manual-hitl", action="store_true",
                         help="禁用自动审批，改为人工审批")
     args = parser.parse_args()
@@ -1231,6 +1251,7 @@ def main():
         "enable_supervisor": not args.no_supervisor,
         "enable_arch_supervisor": not args.no_arch_supervisor,
         "enable_doctor": not args.no_doctor,
+        "enable_bug_fixer": not args.no_bug_fixer,
         "auto_approve_hitl": not args.manual_hitl,
         "data_yaml": args.data_yaml,
         "imgsz": args.imgsz,
