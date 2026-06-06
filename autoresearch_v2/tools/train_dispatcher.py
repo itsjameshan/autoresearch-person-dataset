@@ -85,9 +85,15 @@ def apply_config_diff(config_diff: dict, train_script: str = TRAIN_SCRIPT) -> bo
         if not stripped or stripped.startswith("#"):
             continue
         for key, value in config_diff.items():
-            if re.match(rf"^{key}\s*=", stripped):
+            m = re.match(rf"(?P<indent>\s*){re.escape(key)}\s*=\s*(?P<rest>.*)$", line)
+            if m:
+                indent = m.group("indent") or ""
+                rest = m.group("rest")
+                trailing = ""
+                if rest.rstrip().endswith(","):
+                    trailing = ","
                 safe_val = _sanitize_python_value(value)
-                lines[i] = f"{key} = {safe_val}\n"
+                lines[i] = f"{indent}{key} = {safe_val}{trailing}\n"
                 modified = True
                 break
 
