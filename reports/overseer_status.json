@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-06-06T13:47:27.238313",
+  "uptime": "0h20m30s",
+  "agents": [
+    {
+      "name": "Orchestrator",
+      "role": "主战斗群: Researcher + Curator + Triage 一体化闭环",
+      "severity": "critical",
+      "status": "running",
+      "pid": 25924,
+      "restart_count": 0,
+      "uptime_sec": 57,
+      "uptime": "0h00m57s",
+      "last_error": ""
+    },
+    {
+      "name": "SupervisorAgent",
+      "role": "监督智能体: 指标监控 + 决策审计 + 硬件安全 + 异常检测",
+      "severity": "warning",
+      "status": "running",
+      "pid": 16744,
+      "restart_count": 0,
+      "uptime_sec": 1238,
+      "uptime": "0h20m38s",
+      "last_error": ""
+    },
+    {
+      "name": "ArchitectureSupervisor",
+      "role": "架构合规监督: 32条架构规则持续审计",
+      "severity": "warning",
+      "status": "running",
+      "pid": 24300,
+      "restart_count": 0,
+      "uptime_sec": 1236,
+      "uptime": "0h20m36s",
+      "last_error": ""
+    },
+    {
+      "name": "OverseerDoctor",
+      "role": "总管诊断医生: 实时监控 Web UI 日志 + 自动修复 error/bug + 卡死重启 + 策略调整",
+      "severity": "critical",
+      "status": "running",
+      "pid": 17900,
+      "restart_count": 0,
+      "uptime_sec": 1234,
+      "uptime": "0h20m34s",
+      "last_error": ""
+    },
+    {
+      "name": "Dashboard-v2",
+      "role": "v2 只读仪表盘: 实验详情 / 决策记录 / FP-FN 分析 (端口 5052)",
+      "severity": "info",
+      "status": "running",
+      "pid": 21660,
+      "restart_count": 0,
+      "uptime_sec": 1232,
+      "uptime": "0h20m32s",
+      "last_error": ""
+    }
+  ],
+  "best_cds": 0.4772,
+  "experiment_count": 171833,
+  "target_cds": 0.85,
+  "goal_met": false
+}
