@@ -413,6 +413,8 @@ function refreshHitl() {
       '<div style="margin-top:8px;font-size:11px;color:#666">' +
       'Approve/deny via the dedicated HITL UI on port 5051: ' +
       '<a href="http://127.0.0.1:5051/" target="_blank">hitl_app</a></div>';
+  }).catch(err => {
+    document.getElementById("hitl").innerHTML = '<div class="err">Failed to load HITL gates: ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -437,6 +439,8 @@ function refreshIssues() {
           <td><span class="sha">${escapeHtml(shortSha(r.discovered_in_run))}</span></td>
         </tr>`;
       }).join("") + "</tbody></table>";
+  }).catch(err => {
+    document.getElementById("issues").innerHTML = '<div class="err">Failed to load issues: ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -459,6 +463,8 @@ function refreshSweeps() {
         <td class="num">${r.best_trial !== null ? r.best_trial : "—"}</td>
         <td><code style="font-size:11px">${escapeHtml(r.best_params)}</code></td>
       </tr>`).join("") + "</tbody></table>";
+  }).catch(err => {
+    document.getElementById("sweeps").innerHTML = '<div class="err">Failed to load sweeps: ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -566,11 +572,15 @@ def _budget_for_period(state: "StateDB", period: str) -> dict:
         return {"period": period, "exists": False}
 
 
-def _list_optuna_studies(study_db_path: Path) -> list[dict]:
-    """Best-effort summary of every Optuna study in the storage SQLite.
+def _list_optuna_studies(study_db_path: Path, limit: int = 20) -> list[dict]:
+    """Best-effort summary of recent Optuna studies in the storage SQLite.
 
     Returns rows with study_name, n_trials, best_value, best_trial, best_params
     string. If optuna isn't importable or the file doesn't exist, returns [].
+    
+    Args:
+        study_db_path: Path to optuna.db
+        limit: Maximum number of recent studies to return (default: 20)
     """
     if not study_db_path.is_file():
         return []
@@ -585,8 +595,10 @@ def _list_optuna_studies(study_db_path: Path) -> list[dict]:
     except Exception:
         return []
 
+    names_sorted = sorted(names, reverse=True)[:limit]
+    
     rows = []
-    for name in names:
+    for name in names_sorted:
         try:
             study = optuna.load_study(study_name=name, storage=storage)
         except Exception:
@@ -596,7 +608,7 @@ def _list_optuna_studies(study_db_path: Path) -> list[dict]:
             best = study.best_trial
             best_value = float(best.value) if best.value is not None else None
             best_trial = best.number
-            best_params = json.dumps(best.params, ensure_ascii=False)
+            best_params = json.dumps(best.params, ensure_ascii=False)[:100] + "..." if len(str(best.params)) > 100 else json.dumps(best.params, ensure_ascii=False)
         except (ValueError, KeyError):
             best_value = None
             best_trial = None
