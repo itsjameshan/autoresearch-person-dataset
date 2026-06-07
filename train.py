@@ -9,7 +9,7 @@ from evaluate import evaluate_model, print_metrics
 # ══════════════════════════════════════════════════════════════
 
 MODEL = "yolo12n.pt"
-DATA_YAML = "D:\\PythonProject\\person_dataset\\person.yaml"
+DATA_YAML = "person_dataset/person.yaml"
 IMGSZ = 640
 EPOCHS = 2
 
@@ -70,10 +70,14 @@ PROJECT = "autoresearch_runs"
 NAME = "exp_mosaic_boost_v6"
 _REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+LLM_BACKEND = "ollama"
+
+
 def _abs(rel_or_abs: str) -> str:
     if os.path.isabs(rel_or_abs):
         return os.path.normpath(rel_or_abs)
     return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
+
 
 def train():
     model_path = _abs(MODEL)
@@ -83,8 +87,8 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz = 256,
-        batch = 6,
+        imgsz=IMGSZ,
+        batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
         project=PROJECT,
@@ -134,6 +138,7 @@ def train():
 
     return best_pt, epochs_completed
 
+
 if __name__ == "__main__":
     best_pt, epochs_completed = train()
     data_yaml_path = _abs(DATA_YAML)
@@ -144,4 +149,3 @@ if __name__ == "__main__":
         torch.cuda.empty_cache()
     except:
         pass
-LLM_BACKEND = "ollama"
