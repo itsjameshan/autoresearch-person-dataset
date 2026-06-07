@@ -44,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.006177430943619523
+LR0 = 0.0018625946046852751
 LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
@@ -54,13 +54,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.3681521095156265
+MOSAIC = 0.8596606136978102
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 10.197112905315404
+BOX = 18.992929999178337
 CLS = 1.0
 
 CONF = 0.001
@@ -87,7 +87,7 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz=IMGSZ,
+        imgsz = 768,
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
