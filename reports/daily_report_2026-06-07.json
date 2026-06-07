@@ -1,10 +1,10 @@
 {
   "report_date": "2026-06-07",
-  "summary": "LLM不可用，自动生成基础报告。今日完成 0 次实验，失败 96 次，最佳CDS=0.0000。",
+  "summary": "LLM不可用，自动生成基础报告。今日完成 0 次实验，失败 97 次，最佳CDS=0.0000。",
   "training_results": {
     "total_experiments": 100,
     "completed": 0,
-    "failed": 96,
+    "failed": 97,
     "best_cds_today": 0.0,
     "best_cds_overall": 0.4911,
     "cds_improvement": -0.4911,
@@ -33,43 +33,43 @@
     }
   },
   "error_analysis": {
-    "total_errors": 96,
+    "total_errors": 97,
     "error_breakdown": {
       "oom": 0,
       "nan_loss": 0,
       "timeout": 0,
       "config_error": 0,
-      "other": 96
+      "other": 97
     },
-    "unresolved_errors": 96,
+    "unresolved_errors": 97,
     "need_human_intervention": true,
     "error_details": [
       {
-        "run_id": "optuna_hpo_20260607_145857_231817_t010",
+        "run_id": "optuna_hpo_20260607_183018_099c83_t007",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_145824_19de1a_t011",
+        "run_id": "optuna_hpo_20260607_183134_964eae_t002",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_145857_231817_t009",
+        "run_id": "optuna_hpo_20260607_182907_670125_t011",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_145857_231817_t008",
+        "run_id": "optuna_hpo_20260607_183018_099c83_t006",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_145824_19de1a_t010",
+        "run_id": "optuna_hpo_20260607_183134_964eae_t001",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
@@ -92,53 +92,53 @@
   },
   "researcher_decisions_today": [
     {
-      "action_type": "stop",
-      "rationale": "LLM连续失败，自动停止",
+      "action_type": "hpo_sweep",
+      "rationale": "trial=7 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=11 study=hpo_20260607_182907_670125 params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=2 study=hpo_20260607_183134_964eae params={\"LR0\": 0.0011900590783184247, \"BOX\": 17.99264218662",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=1 study=hpo_20260607_183134_964eae params={\"LR0\": 0.006009974718380315, \"BOX\": 7.3402796066365",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=6 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0028265938763074048, \"BOX\": 13.48419636022",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=10 study=hpo_20260607_182907_670125 params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=5 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0018625946046852751, \"BOX\": 18.99292999917",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=0 study=hpo_20260607_183134_964eae params={\"LR0\": 0.0030710573677773722, \"BOX\": 19.26071459614",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=9 study=hpo_20260607_182907_670125 params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
       "rationale": "当前仍在冷启动阶段（暂无 completed 实验），先用 Optuna 在关键参数空间做初始探索以建立基线。",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=10 study=hpo_20260607_145857_231817 params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=11 study=hpo_20260607_145824_19de1a params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=9 study=hpo_20260607_145857_231817 params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=8 study=hpo_20260607_145857_231817 params={\"LR0\": 0.019547606787757625, \"BOX\": 16.475174945004",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=10 study=hpo_20260607_145824_19de1a params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=7 study=hpo_20260607_145857_231817 params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=11 study=hpo_20260607_145737_a3c96f params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
-      "outcome": "unknown"
-    },
-    {
-      "action_type": "hpo_sweep",
-      "rationale": "trial=9 study=hpo_20260607_145824_19de1a params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
       "outcome": "unknown"
     }
   ]
