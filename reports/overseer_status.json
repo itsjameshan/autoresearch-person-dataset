@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-06-07T19:56:35.361701",
-  "uptime": "9h26m57s",
+  "timestamp": "2026-06-07T20:00:35.377293",
+  "uptime": "9h30m57s",
   "agents": [
     {
       "name": "Orchestrator",
@@ -9,8 +9,8 @@
       "status": "running",
       "pid": 36272,
       "restart_count": 1,
-      "uptime_sec": 450,
-      "uptime": "0h07m30s",
+      "uptime_sec": 690,
+      "uptime": "0h11m30s",
       "last_error": ""
     },
     {
@@ -20,8 +20,8 @@
       "status": "running",
       "pid": 7636,
       "restart_count": 2,
-      "uptime_sec": 15336,
-      "uptime": "4h15m36s",
+      "uptime_sec": 15576,
+      "uptime": "4h19m36s",
       "last_error": ""
     },
     {
@@ -31,8 +31,8 @@
       "status": "running",
       "pid": 7908,
       "restart_count": 0,
-      "uptime_sec": 34025,
-      "uptime": "9h27m05s",
+      "uptime_sec": 34265,
+      "uptime": "9h31m05s",
       "last_error": ""
     },
     {
@@ -42,8 +42,8 @@
       "status": "running",
       "pid": 7600,
       "restart_count": 0,
-      "uptime_sec": 34023,
-      "uptime": "9h27m03s",
+      "uptime_sec": 34263,
+      "uptime": "9h31m03s",
       "last_error": ""
     },
     {
@@ -53,8 +53,8 @@
       "status": "running",
       "pid": 16892,
       "restart_count": 0,
-      "uptime_sec": 34021,
-      "uptime": "9h27m01s",
+      "uptime_sec": 34261,
+      "uptime": "9h31m01s",
       "last_error": ""
     },
     {
@@ -64,13 +64,13 @@
       "status": "running",
       "pid": 20260,
       "restart_count": 0,
-      "uptime_sec": 34019,
-      "uptime": "9h26m59s",
+      "uptime_sec": 34259,
+      "uptime": "9h30m59s",
       "last_error": ""
     }
   ],
   "best_cds": 0.4911,
-  "experiment_count": 4222,
+  "experiment_count": 4232,
   "target_cds": 0.85,
   "goal_met": false
 }
