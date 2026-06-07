@@ -44,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.0006177430943619523
+LR0 = 0.006177430943619523
 LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
@@ -83,8 +83,8 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz = 640,
-        batch = 16,
+        imgsz = 128,
+        batch = 6,
         device=DEVICE,
         patience=PATIENCE,
         project=PROJECT,
