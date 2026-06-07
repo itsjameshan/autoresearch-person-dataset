@@ -45,31 +45,31 @@
     "need_human_intervention": true,
     "error_details": [
       {
-        "run_id": "optuna_hpo_20260607_183018_099c83_t007",
+        "run_id": "optuna_hpo_20260607_192443_d346da_t007",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_183134_964eae_t002",
+        "run_id": "optuna_hpo_20260607_192336_0be569_t011",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_182907_670125_t011",
+        "run_id": "optuna_hpo_20260607_192443_d346da_t006",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_183018_099c83_t006",
+        "run_id": "optuna_hpo_20260607_192336_0be569_t010",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
       },
       {
-        "run_id": "optuna_hpo_20260607_183134_964eae_t001",
+        "run_id": "optuna_hpo_20260607_192336_0be569_t009",
         "error_type": "failed",
         "root_cause": "{}",
         "resolution": "pending"
@@ -93,52 +93,52 @@
   "researcher_decisions_today": [
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=7 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
+      "rationale": "trial=7 study=hpo_20260607_192443_d346da params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=11 study=hpo_20260607_182907_670125 params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
+      "rationale": "trial=11 study=hpo_20260607_192336_0be569 params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=2 study=hpo_20260607_183134_964eae params={\"LR0\": 0.0011900590783184247, \"BOX\": 17.99264218662",
+      "rationale": "trial=10 study=hpo_20260607_192336_0be569 params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=1 study=hpo_20260607_183134_964eae params={\"LR0\": 0.006009974718380315, \"BOX\": 7.3402796066365",
+      "rationale": "trial=6 study=hpo_20260607_192443_d346da params={\"LR0\": 0.0028265938763074048, \"BOX\": 13.48419636022",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=6 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0028265938763074048, \"BOX\": 13.48419636022",
+      "rationale": "trial=9 study=hpo_20260607_192336_0be569 params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=10 study=hpo_20260607_182907_670125 params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
+      "rationale": "trial=5 study=hpo_20260607_192443_d346da params={\"LR0\": 0.0018625946046852751, \"BOX\": 18.99292999917",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=5 study=hpo_20260607_183018_099c83 params={\"LR0\": 0.0018625946046852751, \"BOX\": 18.99292999917",
+      "rationale": "trial=4 study=hpo_20260607_192443_d346da params={\"LR0\": 0.012106896936002164, \"BOX\": 8.1850866601741",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=0 study=hpo_20260607_183134_964eae params={\"LR0\": 0.0030710573677773722, \"BOX\": 19.26071459614",
+      "rationale": "trial=8 study=hpo_20260607_192336_0be569 params={\"LR0\": 0.019547606787757625, \"BOX\": 16.475174945004",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "trial=9 study=hpo_20260607_182907_670125 params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
+      "rationale": "trial=3 study=hpo_20260607_192443_d346da params={\"LR0\": 0.00834110643236209, \"BOX\": 5.30876741443703",
       "outcome": "unknown"
     },
     {
       "action_type": "hpo_sweep",
-      "rationale": "当前仍在冷启动阶段（暂无 completed 实验），先用 Optuna 在关键参数空间做初始探索以建立基线。",
+      "rationale": "trial=7 study=hpo_20260607_192336_0be569 params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
       "outcome": "unknown"
     }
   ]
