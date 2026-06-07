@@ -1,7 +1,7 @@
 """
 orchestrator.py — 主驱动器，替代 ollama_runner.py
 
-单线程主循环驱动器，协调 Researcher / Curator / Triage 三个 Agent，
+单线程主循环驱动器，协调 Researcher / Curator / Triage / Reporter 四个 Agent，
 通过 SQLite 状态库交流，不用 free-text 互相调用。
 
 终止条件:
@@ -31,6 +31,7 @@ from autoresearch_v2.hitl import HITLGate
 from autoresearch_v2.agents.researcher import ResearcherAgent
 from autoresearch_v2.agents.curator import CuratorAgent
 from autoresearch_v2.agents.triage import TriageAgent
+from autoresearch_v2.agents.reporter import ReporterAgent
 from autoresearch_v2.tools.train_dispatcher import TrainDispatcher, TrainingFailed
 from autoresearch_v2.tools.eval_dispatcher import EvalDispatcher
 from autoresearch_v2.events import EventLogger, DEFAULT_EVENTS_PATH
@@ -112,6 +113,20 @@ class Orchestrator:
             ollama_url=config.get("ollama_url", "http://localhost:11434"),
         )
 
+        self.reports_dir = config.get(
+            "reports_dir",
+            os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")),
+        )
+
+        self.reporter = ReporterAgent(
+            state=self.state,
+            llm_backend=config.get("llm_backend", "auto"),
+            anthropic_model=config.get("anthropic_model", "claude-sonnet-4-20250514"),
+            ollama_model=config.get("ollama_model", "gemma3:4b"),
+            ollama_url=config.get("ollama_url", "http://localhost:11434"),
+            reports_dir=self.reports_dir,
+        )
+
         # Activity events stream — printed live to terminal + appended to JSONL.
         # The Windows GPU operator can monitor a single window; tools can tail
         # activity_events.jsonl for structured replay.
@@ -120,11 +135,12 @@ class Orchestrator:
             also_stdout=config.get("events_to_stdout", True),
         )
 
-        # Curator + Triage need the EventLogger so their LLM call windows
+        # Curator + Triage + Reporter need the EventLogger so their LLM call windows
         # don't leave the operator staring at a dark terminal. Patch it in
         # post-construction (the agents tolerate a None initial value).
         self.curator.events = self.events
         self.triage.events = self.events
+        self.reporter.events = self.events
 
         self.train_dispatcher = TrainDispatcher(
             state=self.state, events_logger=self.events,
@@ -159,11 +175,77 @@ class Orchestrator:
             os.path.dirname(os.path.abspath(__file__)), "state", "STOP"
         )
 
+        # Daily report tracking
+        self._last_report_date: Optional[str] = None
+        self._report_interval_hours = config.get("report_interval_hours", 24)
+
     def _generate_run_id(self) -> str:
         return f"run_{uuid.uuid4().hex[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     def _check_stop_signal(self) -> bool:
         return os.path.exists(self.stop_signal_file)
+
+    def _maybe_generate_daily_report(self):
+        """Check if a daily report is due and generate one if so."""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+
+        # Already generated a report today
+        if self._last_report_date == today_str:
+            return
+
+        # Check if enough time has passed since last report
+        if self._last_report_date is not None:
+            try:
+                last_dt = datetime.strptime(self._last_report_date, "%Y-%m-%d")
+                hours_since = (now - last_dt).total_seconds() / 3600
+                if hours_since < self._report_interval_hours:
+                    return
+            except ValueError:
+                pass
+
+        log(f"触发每日报告生成 ({today_str})...", "AGENT")
+        self.events.emit("reporter_triggered", report_date=today_str)
+
+        try:
+            report = self.reporter.generate_report(report_date=today_str)
+            self._last_report_date = today_str
+
+            summary = report.get("summary", "无")
+            log(f"日报生成完成: {summary}", "OK")
+
+            tr = report.get("training_results", {})
+            log(f"  今日实验: {tr.get('total_experiments', 0)} | "
+                f"最佳CDS: {tr.get('best_cds_today', 0):.4f} | "
+                f"趋势: {tr.get('metrics_trend', '?')}", "INFO")
+
+            ns = report.get("next_steps", {})
+            log(f"  建议动作: {ns.get('recommended_action', '?')} | "
+                f"策略: {ns.get('strategy', '')[:80]}", "SUGGEST")
+
+            ea = report.get("error_analysis", {})
+            if ea.get("need_human_intervention"):
+                log(f"  需要人工介入！未解决错误: {ea.get('unresolved_errors', 0)}", "WARN")
+
+            # Save report paths to state artifacts
+            json_path = os.path.join(self.reports_dir, f"daily_report_{today_str}.json")
+            md_path = os.path.join(self.reports_dir, f"daily_report_{today_str}.md")
+            if os.path.exists(json_path):
+                self.state.insert_artifact(
+                    run_id=f"daily_report_{today_str}",
+                    kind="daily_report_json",
+                    path=json_path,
+                )
+            if os.path.exists(md_path):
+                self.state.insert_artifact(
+                    run_id=f"daily_report_{today_str}",
+                    kind="daily_report_md",
+                    path=md_path,
+                )
+
+        except Exception as e:
+            log(f"日报生成失败: {e}", "CRIT")
+            self.events.emit("reporter_failed", report_date=today_str, error=str(e))
 
     def _check_stagnation(self) -> bool:
         recent = self.state.get_recent_experiments(self.stagnation_window + 1)
@@ -497,6 +579,20 @@ class Orchestrator:
                         cds=result.best_cds,
                     )
                     time.sleep(self.cooldown_sec)
+                    
+                    # HPO完成后检查停止条件
+                    if self._check_stop_signal():
+                        log("收到人工停止信号", "WARN")
+                        self.events.emit("halt", reason="manual stop signal")
+                        final_status = "manual_stop"
+                        break
+                    
+                    best_after_hpo = self.state.get_best_metrics() or {}
+                    if best_after_hpo.get("cds", 0) >= self.target_cds:
+                        log(f"🎉 HPO后目标达成！CDS={best_after_hpo.get('cds',0):.4f} >= {self.target_cds}", "OK")
+                        final_status = "target_met"
+                        break
+                    
                     continue
                 except Exception as e:
                     log(f"Optuna 扫描失败: {e}", "CRIT")
@@ -636,6 +732,15 @@ class Orchestrator:
 
             if self._check_stagnation():
                 log(f"检测到平台期 (连续{self.stagnation_window}轮CDS提升<{self.stagnation_min_delta})", "WARN")
+                self.events.emit(
+                    "stagnation_detected",
+                    iteration=self.iteration,
+                    window=self.stagnation_window,
+                    min_delta=self.stagnation_min_delta,
+                )
+                # 如果连续多轮停滞，考虑增加随机扰动或切换策略
+                if self.iteration > self.stagnation_window * 2:
+                    log(f"⚠️ 长期停滞，建议切换策略", "WARN")
 
             if fp_fn_data:
                 log("触发 Curator 异步分析...", "AGENT")
@@ -655,6 +760,12 @@ class Orchestrator:
             self.budget.commit_actual(run_id, actual_gpu_min, actual_gpu_min * 0.01)
 
             time.sleep(self.cooldown_sec)
+
+            # Check if daily report is due
+            self._maybe_generate_daily_report()
+
+        # Generate a final daily report at session end
+        self._maybe_generate_daily_report()
 
         best = self.state.get_best_metrics() or {}
         self.events.emit(
@@ -797,6 +908,8 @@ def main():
                         help="过拟合检测阈值 (val-test gap)")
     parser.add_argument("--overfitting-action", type=float, default=OVERFITTING_ACTION_THRESHOLD,
                         help="触发过拟合处理的阈值")
+    parser.add_argument("--report-interval-hours", type=float, default=24,
+                        help="日报生成间隔（小时，默认24）")
     args = parser.parse_args()
 
     config = {
@@ -815,6 +928,7 @@ def main():
         "dataset_gate_enabled": not args.skip_dataset_gate,
         "overfitting_gap_threshold": args.overfitting_gap,
         "overfitting_action_threshold": args.overfitting_action,
+        "report_interval_hours": args.report_interval_hours,
     }
 
     if args.config:
