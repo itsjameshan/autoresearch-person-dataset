@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-06-07T21:14:30.347638",
+  "timestamp": "2026-06-08T17:18:20.716563",
   "uptime": "0h02m30s",
   "agents": [
     {
@@ -7,7 +7,7 @@
       "role": "主战斗群: Researcher + Curator + Triage 一体化闭环",
       "severity": "critical",
       "status": "running",
-      "pid": 27628,
+      "pid": 26992,
       "restart_count": 0,
       "uptime_sec": 133,
       "uptime": "0h02m13s",
@@ -18,7 +18,7 @@
       "role": "监督智能体: 指标监控 + 决策审计 + 硬件安全 + 异常检测",
       "severity": "warning",
       "status": "running",
-      "pid": 23684,
+      "pid": 37756,
       "restart_count": 0,
       "uptime_sec": 160,
       "uptime": "0h02m40s",
@@ -29,7 +29,7 @@
       "role": "架构合规监督: 32条架构规则持续审计",
       "severity": "warning",
       "status": "running",
-      "pid": 34344,
+      "pid": 3236,
       "restart_count": 0,
       "uptime_sec": 158,
       "uptime": "0h02m38s",
@@ -40,7 +40,7 @@
       "role": "总管诊断医生: 实时监控 Web UI 日志 + 初级自动修复 error/bug + 卡死重启 + 策略调整",
       "severity": "critical",
       "status": "running",
-      "pid": 8840,
+      "pid": 28640,
       "restart_count": 0,
       "uptime_sec": 156,
       "uptime": "0h02m36s",
@@ -51,7 +51,7 @@
       "role": "Bug修复专家: 消费 OverseerDoctor 修复失败的记录 + 深度修复 (改源码/修DB/杀僵尸/打破死循环)",
       "severity": "critical",
       "status": "running",
-      "pid": 8348,
+      "pid": 29136,
       "restart_count": 0,
       "uptime_sec": 154,
       "uptime": "0h02m34s",
@@ -62,7 +62,7 @@
       "role": "v2 只读仪表盘: 实验详情 / 决策记录 / FP-FN 分析 (端口 5052)",
       "severity": "info",
       "status": "running",
-      "pid": 32104,
+      "pid": 26144,
       "restart_count": 0,
       "uptime_sec": 152,
       "uptime": "0h02m32s",
@@ -70,7 +70,7 @@
     }
   ],
   "best_cds": 0.4911,
-  "experiment_count": 4510,
+  "experiment_count": 4524,
   "target_cds": 0.85,
   "goal_met": false
 }
