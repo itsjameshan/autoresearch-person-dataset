@@ -87,7 +87,7 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz = 256,
+        imgsz = 128,
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
