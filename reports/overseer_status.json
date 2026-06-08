@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-06-08T19:24:21.388456",
-  "uptime": "2h08m30s",
+  "timestamp": "2026-06-08T19:28:21.407217",
+  "uptime": "2h12m30s",
   "agents": [
     {
       "name": "Orchestrator",
       "role": "主战斗群: Researcher + Curator + Triage 一体化闭环",
       "severity": "critical",
       "status": "running",
-      "pid": 36624,
+      "pid": 17340,
       "restart_count": 0,
-      "uptime_sec": 88,
-      "uptime": "0h01m28s",
+      "uptime_sec": 106,
+      "uptime": "0h01m46s",
       "last_error": ""
     },
     {
@@ -18,10 +18,10 @@
       "role": "监督智能体: 指标监控 + 决策审计 + 硬件安全 + 异常检测",
       "severity": "warning",
       "status": "running",
-      "pid": 33496,
+      "pid": 26160,
       "restart_count": 0,
-      "uptime_sec": 5743,
-      "uptime": "1h35m43s",
+      "uptime_sec": 102,
+      "uptime": "0h01m42s",
       "last_error": ""
     },
     {
@@ -31,8 +31,8 @@
       "status": "running",
       "pid": 3236,
       "restart_count": 0,
-      "uptime_sec": 7718,
-      "uptime": "2h08m38s",
+      "uptime_sec": 7958,
+      "uptime": "2h12m38s",
       "last_error": ""
     },
     {
@@ -42,8 +42,8 @@
       "status": "running",
       "pid": 28640,
       "restart_count": 0,
-      "uptime_sec": 7716,
-      "uptime": "2h08m36s",
+      "uptime_sec": 7956,
+      "uptime": "2h12m36s",
       "last_error": ""
     },
     {
@@ -53,8 +53,8 @@
       "status": "running",
       "pid": 29136,
       "restart_count": 0,
-      "uptime_sec": 7714,
-      "uptime": "2h08m34s",
+      "uptime_sec": 7954,
+      "uptime": "2h12m34s",
       "last_error": ""
     },
     {
@@ -64,13 +64,13 @@
       "status": "running",
       "pid": 26144,
       "restart_count": 0,
-      "uptime_sec": 7712,
-      "uptime": "2h08m32s",
+      "uptime_sec": 7952,
+      "uptime": "2h12m32s",
       "last_error": ""
     }
   ],
   "best_cds": 0.4911,
-  "experiment_count": 4926,
+  "experiment_count": 4942,
   "target_cds": 0.85,
   "goal_met": false
 }
