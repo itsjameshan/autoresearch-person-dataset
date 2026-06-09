@@ -712,24 +712,52 @@ class FixExecutor:
         current_model = self._get_current_model()
         current_imgsz = self._get_current_imgsz()
         current_batch = self._get_current_batch()
+        current_lr0 = self._read_param("LR0", 0.01) or 0.01
 
-        if current_imgsz > 960:
-            new_imgsz = max(640, current_imgsz - 320)
+        changes = []
+        
+        if current_imgsz > 640:
+            new_imgsz = max(640, current_imgsz - 160)
             self._write_train_param("IMGSZ", new_imgsz)
-            msg = f"强制策略调整: IMGSZ {current_imgsz}→{new_imgsz}"
-            new_batch = max(2, current_batch)
-            self._write_train_param("BATCH", new_batch)
-            msg += f", BATCH→{new_batch}"
-        else:
-            try:
-                idx = MODEL_SIZES.index(current_model)
-                new_idx = max(0, idx - 1)
-            except ValueError:
-                new_idx = 0
-            new_model = MODEL_SIZES[new_idx]
-            self._write_train_param("MODEL", new_model)
-            msg = f"强制策略调整: MODEL {current_model}→{new_model}"
+            changes.append(f"IMGSZ {current_imgsz}→{new_imgsz}")
+        elif current_imgsz == 640:
+            new_imgsz = 512
+            self._write_train_param("IMGSZ", new_imgsz)
+            changes.append(f"IMGSZ {current_imgsz}→{new_imgsz}")
 
+        try:
+            idx = MODEL_SIZES.index(current_model)
+            if idx < len(MODEL_SIZES) - 1:
+                new_idx = idx + 1
+                new_model = MODEL_SIZES[new_idx]
+                self._write_train_param("MODEL", new_model)
+                changes.append(f"MODEL {current_model}→{new_model}")
+            elif idx == len(MODEL_SIZES) - 1:
+                new_idx = max(0, idx - 1)
+                new_model = MODEL_SIZES[new_idx]
+                if new_model != current_model:
+                    self._write_train_param("MODEL", new_model)
+                    changes.append(f"MODEL {current_model}→{new_model}")
+                else:
+                    new_lr0 = max(1e-5, current_lr0 * 0.5)
+                    self._write_train_param("LR0", new_lr0)
+                    changes.append(f"LR0 {current_lr0:.6f}→{new_lr0:.6f}")
+        except ValueError:
+            self._write_train_param("MODEL", "yolo12s.pt")
+            changes.append(f"MODEL {current_model}→yolo12s.pt")
+
+        if current_batch > 2:
+            new_batch = max(2, current_batch - 1)
+            self._write_train_param("BATCH", new_batch)
+            changes.append(f"BATCH {current_batch}→{new_batch}")
+
+        if not changes:
+            new_lr0 = max(1e-5, current_lr0 * 0.3)
+            self._write_train_param("LR0", new_lr0)
+            self._write_train_param("AMP", False)
+            changes.append(f"LR0 {current_lr0:.6f}→{new_lr0:.6f}, AMP→False")
+
+        msg = "强制策略调整: " + ", ".join(changes)
         log(f"force_strategy_change: {msg}", "STRATEGY")
         ok = self._agent_api(target, "restart")
         return {"action": "force_strategy_change", "target": target,
@@ -1043,14 +1071,25 @@ class OverseerDoctor:
             pass
 
     def diagnose_with_llm(self, error_info: dict) -> dict:
+        current_model = self.executor._get_current_model()
+        current_imgsz = self.executor._get_current_imgsz()
+        current_batch = self.executor._get_current_batch()
+        current_lr0 = self.executor._read_param("LR0", 0.01) or 0.01
+        
         lines = [
             "## 错误信息",
             f"- 类型: {error_info.get('error_type', 'unknown')}",
             f"- 级别: {error_info.get('log_level', 'UNKNOWN')}",
             f"- 日志: {error_info.get('log_line', '')[:500]}",
             f"- 目标智能体: {error_info.get('target_agent', 'unknown')}",
+            "",
+            "## 当前训练配置",
+            f"- MODEL: {current_model}",
+            f"- IMGSZ: {current_imgsz}",
+            f"- BATCH: {current_batch}",
+            f"- LR0: {current_lr0}",
         ]
-        user_prompt = "\n".join(lines) + "\n\n请诊断并推荐修复方案。严格输出 JSON。"
+        user_prompt = "\n".join(lines) + "\n\n请根据当前配置诊断并推荐修复方案。严格输出 JSON。"
         for attempt in range(self.max_llm_retries):
             response = None
             if self.llm_backend in ("anthropic", "auto"):

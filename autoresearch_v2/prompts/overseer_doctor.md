@@ -119,14 +119,14 @@ force_strategy_change 逻辑：
 
 ```json
 {
-  "root_cause_hypothesis": "CUDA OOM: 当前 batch=8，imgsz=1280 超过 GPU 显存限制，已尝试 batch_half 仍不足",
+  "root_cause_hypothesis": "CUDA OOM: 当前 batch=X，imgsz=Y 超过 GPU 显存限制，已尝试 batch_half 仍不足",
   "confidence": 0.95,
   "recommended_action": "reduce_imgsz",
   "fix_detail": {
-    "current_batch": 4,
-    "current_imgsz": 1280,
-    "suggested_batch": 4,
-    "suggested_imgsz": 960,
+    "current_batch": X,
+    "current_imgsz": Y,
+    "suggested_batch": X,
+    "suggested_imgsz": max(640, Y-320),
     "oom_tier": 2,
     "reason": "batch_half 后仍 OOM，降低输入分辨率"
   },
