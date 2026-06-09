@@ -31,11 +31,17 @@ from autoresearch_v2.hitl import HITLGate
 from autoresearch_v2.agents.researcher import ResearcherAgent
 from autoresearch_v2.agents.curator import CuratorAgent
 from autoresearch_v2.agents.triage import TriageAgent
-from autoresearch_v2.agents.reporter import ReporterAgent
 from autoresearch_v2.tools.train_dispatcher import TrainDispatcher, TrainingFailed
 from autoresearch_v2.tools.eval_dispatcher import EvalDispatcher
 from autoresearch_v2.events import EventLogger, DEFAULT_EVENTS_PATH
 from autoresearch_v2.dataset_inspector import inspect_dataset
+
+REPORTER_AVAILABLE = True
+try:
+    from autoresearch_v2.agents.reporter import ReporterAgent
+except ImportError:
+    ReporterAgent = None
+    REPORTER_AVAILABLE = False
 
 DOCTOR_AVAILABLE = True
 try:
@@ -118,14 +124,17 @@ class Orchestrator:
             os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")),
         )
 
-        self.reporter = ReporterAgent(
-            state=self.state,
-            llm_backend=config.get("llm_backend", "auto"),
-            anthropic_model=config.get("anthropic_model", "claude-sonnet-4-20250514"),
-            ollama_model=config.get("ollama_model", "gemma3:4b"),
-            ollama_url=config.get("ollama_url", "http://localhost:11434"),
-            reports_dir=self.reports_dir,
-        )
+        if REPORTER_AVAILABLE:
+            self.reporter = ReporterAgent(
+                state=self.state,
+                llm_backend=config.get("llm_backend", "auto"),
+                anthropic_model=config.get("anthropic_model", "claude-sonnet-4-20250514"),
+                ollama_model=config.get("ollama_model", "gemma3:4b"),
+                ollama_url=config.get("ollama_url", "http://localhost:11434"),
+                reports_dir=self.reports_dir,
+            )
+        else:
+            self.reporter = None
 
         # Activity events stream — printed live to terminal + appended to JSONL.
         # The Windows GPU operator can monitor a single window; tools can tail
@@ -140,7 +149,8 @@ class Orchestrator:
         # post-construction (the agents tolerate a None initial value).
         self.curator.events = self.events
         self.triage.events = self.events
-        self.reporter.events = self.events
+        if self.reporter is not None:
+            self.reporter.events = self.events
 
         self.train_dispatcher = TrainDispatcher(
             state=self.state, events_logger=self.events,
@@ -187,6 +197,8 @@ class Orchestrator:
 
     def _maybe_generate_daily_report(self):
         """Check if a daily report is due and generate one if so."""
+        if self.reporter is None:
+            return
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
 
