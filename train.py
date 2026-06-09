@@ -44,7 +44,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.0035482331950002504
+LR0 = 0.006177430943619523
 LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
@@ -54,13 +54,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.8331414797279602
+MOSAIC = 0.3681521095156265
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 14.36125290758548
+BOX = 10.197112905315404
 CLS = 1.0
 
 CONF = 0.001
@@ -82,12 +82,21 @@ def _abs(rel_or_abs: str) -> str:
 def train():
     model_path = _abs(MODEL)
     data_yaml = _abs(DATA_YAML)
+    
+    print(f"[INFO] Training configuration:")
+    print(f"  Model: {model_path}")
+    print(f"  Data: {data_yaml}")
+    print(f"  Image size: {IMGSZ}")
+    print(f"  Batch size: {BATCH}")
+    print(f"  Epochs: {EPOCHS}")
+    print(f"  Device: {DEVICE}")
+    
     model = YOLO(model_path)
 
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz = 128,
+        imgsz=IMGSZ,
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
