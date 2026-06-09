@@ -1,6 +1,8 @@
 # 真实数据目录固定在仓库内 person_dataset/ 下。
 # 与 README 一致：images/labels 不走仓库外部路径。
-path: .
+# NOTE: `path` is resolved by ultralytics relative to the launch CWD (repo root),
+# NOT relative to this file. Images live in <repo>/person_dataset/, so point there.
+path: person_dataset
 train: images/train
 val: images/val
 test: images/test
