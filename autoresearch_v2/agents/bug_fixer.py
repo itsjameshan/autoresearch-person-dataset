@@ -547,42 +547,44 @@ class DeepFixer:
                     "success": False, "message": f"修复 state.db 失败: {e}"}
 
     def kill_zombie_processes(self) -> dict:
-        """杀僵尸进程 — 查找并清理残留的训练进程"""
+        """杀僵尸进程 — 只清理真正残留(超时孤儿)的训练进程，绝不杀正在运行的训练。
+
+        旧实现按命令行字符串匹配 train.py/ultralytics 后无条件 taskkill，会把
+        Orchestrator 刚启动、正在运行的训练(及其 DataLoader 子进程)一并杀掉，
+        触发 `_pickle.UnpicklingError: pickle data was truncated`、训练失败。
+        train_dispatcher 本身已在 TRAIN_TIMEOUT(7200s) 强杀超时训练，故只有存活
+        超过该阈值的才是调度器已死留下的孤儿 —— 正在运行的训练只有数秒到数分钟。
+        """
+        # 调度器 7200s 强杀超时训练；留 watchdog 缓冲后超过此值才算孤儿。
+        ZOMBIE_MIN_AGE_SEC = 7800
         killed = 0
         try:
-            # Windows: 查找残留的 python 训练进程
-            if sys.platform == "win32":
-                result = subprocess.run(
-                    ["wmic", "process", "get", "ProcessId,CommandLine"],
-                    capture_output=True, text=True, timeout=10
-                )
-                for line in result.stdout.splitlines():
-                    if "train.py" in line or "ultralytics" in line:
-                        parts = line.strip().split()
-                        if parts:
-                            pid = parts[-1]
-                            try:
-                                subprocess.run(
-                                    ["taskkill", "/F", "/PID", pid],
-                                    capture_output=True, timeout=5
-                                )
-                                killed += 1
-                            except Exception:
-                                pass
-            else:
-                result = subprocess.run(
-                    ["ps", "aux"], capture_output=True, text=True, timeout=10
-                )
-                for line in result.stdout.splitlines():
-                    if "train.py" in line or "ultralytics" in line:
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            pid = parts[1]
-                            try:
-                                subprocess.run(["kill", "-9", pid], timeout=5)
-                                killed += 1
-                            except Exception:
-                                pass
+            import psutil
+        except Exception:
+            # 无 psutil 无法区分"活动训练"与"孤儿"，宁可不杀也不误杀正在运行的训练。
+            return {"action": "kill_zombie", "target": "system",
+                    "success": True, "message": "未发现僵尸进程"}
+
+        try:
+            now = time.time()
+            try:
+                protected = {os.getpid(), os.getppid()}
+            except Exception:
+                protected = {os.getpid()}
+            for p in psutil.process_iter(["pid", "cmdline", "create_time"]):
+                try:
+                    if p.info["pid"] in protected:
+                        continue
+                    cmd = " ".join(p.info.get("cmdline") or [])
+                    if "train.py" not in cmd and "ultralytics" not in cmd:
+                        continue
+                    age = now - (p.info.get("create_time") or now)
+                    if age < ZOMBIE_MIN_AGE_SEC:
+                        continue  # 年轻 = 正在运行的训练，放过
+                    p.kill()
+                    killed += 1
+                except Exception:
+                    continue
         except Exception as e:
             log(f"杀僵尸进程失败: {e}", "WARN")
 

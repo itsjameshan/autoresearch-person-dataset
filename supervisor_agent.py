@@ -786,8 +786,11 @@ class SupervisorAgent:
 
                 crash_loop, msg = self.anomaly_detector.detect_crash_loop()
                 if crash_loop:
-                    log(f"🚨 {msg}，尝试停止训练进程...", "CRIT")
-                    self._kill_training_processes()
+                    # 不要在这里杀正在运行的训练：活着的 train.py 并不是"正在崩溃"的那个，
+                    # 把它在 DataLoader 子进程 spawn 阶段杀掉只会制造新的崩溃
+                    # (_pickle.UnpicklingError: pickle data was truncated)。真正的崩溃循环
+                    # 由 Orchestrator 自己的连续失败熔断处理，这里只上报异常。
+                    log(f"⚠️ {msg}（不终止正在运行的训练，交由 Orchestrator 失败熔断处理）", "WARN")
 
                 metrics = self.load_latest_metrics()
                 if metrics:
