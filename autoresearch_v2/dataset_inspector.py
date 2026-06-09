@@ -158,7 +158,9 @@ def inspect_dataset(data_yaml_path: str, reports_dir: str = "reports") -> dict[s
         return _write_reports(report, reports)
 
     num_classes = int(cfg.get("nc", 1) or 1)
-    base = data_yaml.parent
+    yaml_parent = data_yaml.parent
+    path_from_yaml = cfg.get("path", ".")
+    base = yaml_parent / path_from_yaml
 
     split_names = ["train", "val", "test"]
     split_stats: dict[str, SplitStats] = {}

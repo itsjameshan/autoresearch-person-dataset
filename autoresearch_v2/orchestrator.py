@@ -562,6 +562,25 @@ class Orchestrator:
                         f"completed={result.n_completed}/{result.n_trials}",
                         "OK",
                     )
+                    
+                    # 如果没有任何 trial 完成，视为失败
+                    if result.n_completed == 0:
+                        log(f"HPO 扫描失败: 所有 {result.n_trials} 个 trial 均未完成", "CRIT")
+                        try:
+                            self.budget.release_reserved(run_id)
+                        except Exception:
+                            pass
+                        self.consecutive_fails += 1
+                        if self.consecutive_fails >= self.max_consecutive_fails:
+                            self.events.emit(
+                                "halt",
+                                reason=f"{self.max_consecutive_fails} consecutive failures",
+                            )
+                            final_status = "max_consecutive_fails"
+                            break
+                        time.sleep(self.cooldown_sec)
+                        continue
+                    
                     # Reserved budget already consumed inside OptunaRunner per
                     # trial via budget.commit_actual; release the umbrella
                     # reservation we made for the meta-action.
