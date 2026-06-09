@@ -160,7 +160,10 @@ def inspect_dataset(data_yaml_path: str, reports_dir: str = "reports") -> dict[s
     num_classes = int(cfg.get("nc", 1) or 1)
     yaml_parent = data_yaml.parent
     path_from_yaml = cfg.get("path", ".")
-    base = yaml_parent / path_from_yaml
+    if not os.path.isabs(path_from_yaml):
+        base = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / path_from_yaml
+    else:
+        base = Path(path_from_yaml)
 
     split_names = ["train", "val", "test"]
     split_stats: dict[str, SplitStats] = {}

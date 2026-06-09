@@ -79,8 +79,30 @@ def _abs(rel_or_abs: str) -> str:
     return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
 
 
+def _resolve_model(model_name: str) -> str:
+    """Resolve model name to a path, falling back to largest available local model
+    if the requested model is not on disk (to avoid GitHub download failures)."""
+    model_path = _abs(model_name)
+    if os.path.isfile(model_path):
+        return model_path
+    
+    print(f"[WARN] Model {model_name!r} not found on disk, searching for fallback...")
+    available_models = []
+    for name in ["yolo12l.pt", "yolo12s.pt", "yolo12n.pt"]:
+        path = _abs(name)
+        if os.path.isfile(path):
+            available_models.append((name, path))
+    
+    if not available_models:
+        raise RuntimeError(f"No YOLO models found on disk. Cannot train.")
+    
+    best_model = sorted(available_models, key=lambda x: x[0])[-1]
+    print(f"[INFO] Falling back to {best_model[0]}")
+    return best_model[1]
+
+
 def train():
-    model_path = _abs(MODEL)
+    model_path = _resolve_model(MODEL)
     data_yaml = _abs(DATA_YAML)
     
     print(f"[INFO] Training configuration:")
