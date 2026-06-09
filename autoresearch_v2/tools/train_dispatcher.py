@@ -25,7 +25,24 @@ TRAIN_SCRIPT = os.path.normpath(os.path.join(
 LOG_FILE = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "run.log"
 ))
+# Models that live alongside train.py (ultralytics caches go elsewhere)
+MODEL_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", ".."
+))
 TRAIN_TIMEOUT = 7200
+
+# Known error patterns that indicate a specific root cause
+_DOWNLOAD_FAILURE_PATTERNS = [
+    r"Download failure",
+    r"urlopen error",
+    r"WinError 10054",
+    r"curl error 35",
+    r"Connection refused",
+    r"HTTP Error 4\d\d",
+    r"404 Not Found",           # model file not on GitHub
+    r"failed to download",
+    r"model.*not found.*online",
+]
 
 
 class TrainingFailed(Exception):
@@ -72,6 +89,28 @@ def _sanitize_python_value(value):
 
     return repr(str(value))
 
+# ── 10kV isolation: guard MODEL switches ──────────────────────────────────────
+# Ultralytics crashes with a cryptic WinError/curl error when the weights file
+# is not on disk and GitHub is unreachable.  Guard every MODEL write so the loop
+# never selects a model it cannot actually load.
+def _is_model_on_disk(model_name: str) -> bool:
+    """Return True when the .pt file can be found alongside train.py or in
+    the ultralytics cache directory."""
+    if not model_name or not model_name.endswith(".pt"):
+        return False
+    local_path = os.path.join(MODEL_DIR, model_name)
+    if os.path.isfile(local_path):
+        return True
+    # Also check the default ultralytics cache location
+    try:
+        from ultralytics.utils import ASSETS
+        cache = os.path.join(os.path.dirname(ASSETS), "..", model_name)
+        if os.path.isfile(cache):
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def apply_config_diff(config_diff: dict, train_script: str = TRAIN_SCRIPT) -> bool:
     if not config_diff:
@@ -86,6 +125,15 @@ def apply_config_diff(config_diff: dict, train_script: str = TRAIN_SCRIPT) -> bo
         if not stripped or stripped.startswith("#"):
             continue
         for key, value in config_diff.items():
+            # Guard MODEL switches — never write a model we don't have on disk
+            if key == "MODEL" and isinstance(value, str):
+                if not _is_model_on_disk(value):
+                    print(
+                        f"[apply_config_diff] SKIP MODEL={value!r}: "
+                        f"not found on disk — keeping current model",
+                        flush=True,
+                    )
+                    continue
             m = re.match(rf"(?P<indent>\s*){re.escape(key)}\s*=\s*(?P<rest>.*)$", line)
             if m:
                 indent = m.group("indent") or ""
@@ -240,6 +288,22 @@ def run_training(train_script: str = TRAIN_SCRIPT,
     return success, log_tail
 
 
+def _detect_root_cause(log_tail: str) -> str:
+    """Classify a failed training log into a human-readable root_cause string."""
+    for pat in _DOWNLOAD_FAILURE_PATTERNS:
+        if re.search(pat, log_tail, re.IGNORECASE):
+            return "model_download_failed"
+    if re.search(r"CUDA out of memory|OOM", log_tail, re.IGNORECASE):
+        return "cuda_oom"
+    if re.search(r"data.*yaml|yaml.*error|data.*not found", log_tail, re.IGNORECASE):
+        return "data_missing"
+    if re.search(r"index.*out of range|list index|keyerror", log_tail, re.IGNORECASE):
+        return "code_bug"
+    if re.search(r"timeout|timed_out", log_tail, re.IGNORECASE):
+        return "training_timeout"
+    return "unknown"
+
+
 class TrainDispatcher:
     def __init__(self, state=None, train_script: str = TRAIN_SCRIPT,
                  log_file: str = LOG_FILE, events_logger=None):
@@ -292,11 +356,18 @@ class TrainDispatcher:
                 pass
 
         if not success:
+            root_cause = _detect_root_cause(log_tail)
+            print(
+                f"[train_dispatcher] training failed — root_cause={root_cause!r}\n"
+                f"  (find the actual error above in run.log)",
+                flush=True,
+            )
             if self.state:
                 self.state.update_experiment_status(
                     run_id, "failed",
                     gpu_minutes=elapsed_min,
                     cost_usd=elapsed_min * 0.01,
+                    root_cause=root_cause,
                 )
             raise TrainingFailed(
                 f"Training failed (rc={-1})",

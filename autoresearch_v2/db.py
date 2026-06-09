@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     ended_at        TEXT,
     gpu_minutes     REAL NOT NULL DEFAULT 0.0,
     cost_usd        REAL NOT NULL DEFAULT 0.0,
+    root_cause      TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -163,11 +164,19 @@ class StateDB:
         self.conn.commit()
 
     def update_experiment_status(self, run_id: str, status: str,
-                                  gpu_minutes: float = 0.0, cost_usd: float = 0.0):
+                                  gpu_minutes: float = 0.0, cost_usd: float = 0.0,
+                                  root_cause: str = ""):
+        # Ensure root_cause column exists (migration for old DBs)
+        try:
+            self.conn.execute(
+                "ALTER TABLE experiments ADD COLUMN root_cause TEXT NOT NULL DEFAULT ''"
+            )
+        except Exception:
+            pass  # column already exists
         self.conn.execute(
-            """UPDATE experiments SET status=?, gpu_minutes=?, cost_usd=?, ended_at=?
+            """UPDATE experiments SET status=?, gpu_minutes=?, cost_usd=?, ended_at=?, root_cause=?
                WHERE run_id=?""",
-            (status, gpu_minutes, cost_usd, self._now(), run_id)
+            (status, gpu_minutes, cost_usd, self._now(), root_cause, run_id)
         )
         self.conn.commit()
 
