@@ -8,12 +8,12 @@ from evaluate import evaluate_model, print_metrics
 # EXPERIMENT CONFIG
 # ══════════════════════════════════════════════════════════════
 
-MODEL = "yolo12n.pt"
+MODEL = "yolo12s.pt"
 DATA_YAML = "person_dataset/person.yaml"
 IMGSZ = 640
 EPOCHS = 32
 
-BATCH = 13
+BATCH = 12
 import torch
 
 # Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
