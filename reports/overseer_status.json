@@ -1,16 +1,16 @@
 {
-  "timestamp": "2026-06-09T21:54:17.530376",
-  "uptime": "8h27m03s",
+  "timestamp": "2026-06-10T16:05:05.072012",
+  "uptime": "16h32m43s",
   "agents": [
     {
       "name": "Orchestrator",
       "role": "主战斗群: Researcher + Curator + Triage 一体化闭环",
       "severity": "critical",
       "status": "running",
-      "pid": 25688,
-      "restart_count": 2,
-      "uptime_sec": 455,
-      "uptime": "0h07m35s",
+      "pid": 27272,
+      "restart_count": 1,
+      "uptime_sec": 805,
+      "uptime": "0h13m25s",
       "last_error": ""
     },
     {
@@ -18,10 +18,10 @@
       "role": "监督智能体: 指标监控 + 决策审计 + 硬件安全 + 异常检测",
       "severity": "warning",
       "status": "running",
-      "pid": 25880,
+      "pid": 28452,
       "restart_count": 0,
-      "uptime_sec": 8269,
-      "uptime": "2h17m49s",
+      "uptime_sec": 801,
+      "uptime": "0h13m21s",
       "last_error": ""
     },
     {
@@ -29,10 +29,10 @@
       "role": "架构合规监督: 32条架构规则持续审计",
       "severity": "warning",
       "status": "running",
-      "pid": 30228,
+      "pid": 35828,
       "restart_count": 0,
-      "uptime_sec": 30431,
-      "uptime": "8h27m11s",
+      "uptime_sec": 59571,
+      "uptime": "16h32m51s",
       "last_error": ""
     },
     {
@@ -40,10 +40,10 @@
       "role": "总管诊断医生: 实时监控 Web UI 日志 + 初级自动修复 error/bug + 卡死重启 + 策略调整",
       "severity": "critical",
       "status": "running",
-      "pid": 31772,
+      "pid": 30156,
       "restart_count": 0,
-      "uptime_sec": 30429,
-      "uptime": "8h27m09s",
+      "uptime_sec": 59569,
+      "uptime": "16h32m49s",
       "last_error": ""
     },
     {
@@ -51,10 +51,10 @@
       "role": "Bug修复专家: 消费 OverseerDoctor 修复失败的记录 + 深度修复 (改源码/修DB/杀僵尸/打破死循环)",
       "severity": "critical",
       "status": "running",
-      "pid": 5956,
+      "pid": 29636,
       "restart_count": 0,
-      "uptime_sec": 30427,
-      "uptime": "8h27m07s",
+      "uptime_sec": 59567,
+      "uptime": "16h32m47s",
       "last_error": ""
     },
     {
@@ -62,15 +62,15 @@
       "role": "v2 只读仪表盘: 实验详情 / 决策记录 / FP-FN 分析 (端口 5052)",
       "severity": "info",
       "status": "running",
-      "pid": 7056,
+      "pid": 24628,
       "restart_count": 0,
-      "uptime_sec": 30425,
-      "uptime": "8h27m05s",
+      "uptime_sec": 59565,
+      "uptime": "16h32m45s",
       "last_error": ""
     }
   ],
   "best_cds": 0.4911,
-  "experiment_count": 6355,
+  "experiment_count": 6405,
   "target_cds": 0.85,
   "goal_met": false
 }

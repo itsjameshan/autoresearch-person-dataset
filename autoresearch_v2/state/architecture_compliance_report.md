@@ -1,28 +1,36 @@
 # 架构合规监督报告 (v2)
 
-生成时间: 2026-06-05 08:46:56
+生成时间: 2026-06-10 16:04:37
 
 ## 总体评估
 
-**状态: ⚠️ 基本合规** — 13 个警告
+**状态: ⚠️ 基本合规** — 14 个警告
 
 | 级别 | 数量 |
 |------|------|
 | 🚨 CRITICAL | 0 |
-| ⚠️ WARNING | 13 |
+| ⚠️ WARNING | 14 |
 | 📋 INFO | 0 |
-| **总计** | **13** |
+| **总计** | **14** |
 
 ## 按类别统计
 
 | 类别 | CRITICAL | WARNING | INFO |
 |------|----------|---------|------|
-| agent_structure | 0 | 4 | 0 |
+| agent_structure | 0 | 5 | 0 |
 | deterministic_tools | 0 | 1 | 0 |
 | orchestrator | 0 | 5 | 0 |
 | state_layer | 0 | 3 | 0 |
 
 ## 违规详情
+
+### ⚠️ [ARCH-001] 三智能体架构
+
+- **严重级别**: WARNING
+- **类别**: agent_structure
+- **违规描述**: 发现架构未定义的智能体文件: agents/bug_fixer.py
+- **详情**: 架构只允许 Researcher / Curator / Triage 三个智能体
+- **修复建议**: 确认 bug_fixer.py 是否为辅助工具而非独立智能体
 
 ### ⚠️ [ARCH-001] 三智能体架构
 

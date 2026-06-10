@@ -1,7 +1,7 @@
 {
-  "timestamp": "2026-06-09T21:54:35.613899",
-  "total_fixes": 257,
-  "successful_fixes": 31,
-  "loop_breaks": 15,
+  "timestamp": "2026-06-10T16:04:24.943466",
+  "total_fixes": 200,
+  "successful_fixes": 56,
+  "loop_breaks": 30,
   "escalated_count": 0
 }
