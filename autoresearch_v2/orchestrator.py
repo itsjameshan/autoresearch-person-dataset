@@ -181,6 +181,8 @@ class Orchestrator:
 
         self.consecutive_fails = 0
         self.iteration = 0
+        # 自身启动时刻 — 孤儿 trainer 收割的分界线: 只考虑比它更早创建的进程
+        self._start_time = time.time()
         self.stop_signal_file = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "state", "STOP"
         )
@@ -194,6 +196,61 @@ class Orchestrator:
 
     def _check_stop_signal(self) -> bool:
         return os.path.exists(self.stop_signal_file)
+
+    def _reap_orphan_trainers(self):
+        """启动时收割孤儿 train.py。
+
+        只杀同时满足「创建时间早于本进程启动」且「无存活父进程」的训练进程
+        — 即上一个被杀掉的 Orchestrator 留下的孤儿。有存活父进程的 trainer
+        说明另有管理进程持有, 不抢杀, 调度时由单例守卫等待它退出。
+        """
+        try:
+            from autoresearch_v2.tools import train_guard
+        except Exception:
+            return
+        try:
+            reaped = train_guard.reap_orphan_trainers(started_before=self._start_time)
+        except Exception as e:
+            log(f"孤儿训练进程检查失败: {e}", "WARN")
+            return
+        if reaped:
+            pids = [r.get("pid") for r in reaped]
+            log(f"已收割 {len(reaped)} 个孤儿 train.py 进程: pids={pids}", "WARN")
+            self.events.emit("orphan_trainers_reaped", pids=pids)
+        try:
+            leftovers = train_guard.find_live_trainers()
+        except Exception:
+            leftovers = []
+        if leftovers:
+            pids = [t.get("pid") for t in leftovers]
+            log(f"检测到仍存活的 train.py (有存活父进程, 不抢杀): pids={pids} "
+                f"— 调度训练前将等待其退出", "WARN")
+            self.events.emit("live_trainers_detected", pids=pids)
+
+    def _record_eval_failure(self, run_id: str, reason: str) -> bool:
+        """评估产出空指标 → 实验记为 failed (绝不让空 metrics 以 completed
+        留在库里变成 CDS=0.0000 假行), 计入连续失败, 释放预算。
+        返回是否已达连续失败上限 (调用方应 halt)。"""
+        try:
+            self.state.update_experiment_status(run_id, "failed", root_cause=reason)
+        except Exception as e:
+            log(f"标记实验 failed 时出错: {e}", "WARN")
+        self.events.emit("eval_failed", run_id=run_id, reason=reason)
+        try:
+            self.budget.release_reserved(run_id)
+        except Exception:
+            pass
+        self.consecutive_fails += 1
+        return self.consecutive_fails >= self.max_consecutive_fails
+
+    @staticmethod
+    def _hpo_sweep_produced_no_metrics(result) -> bool:
+        """HPO 扫描是否一无所获。判据是「产出非空 metrics 的 trial 数」,
+        不是 n_completed — 失败 trial 也可能被计为 completed (历史 bug)。"""
+        n_valid = getattr(result, "n_with_metrics", None)
+        if n_valid is None:
+            n_valid = getattr(result, "n_completed", 0)
+        return n_valid == 0
 
     def _maybe_generate_daily_report(self):
         """Check if a daily report is due and generate one if so."""
@@ -348,6 +405,10 @@ class Orchestrator:
             max_iters=self.max_iterations,
             max_consecutive_fails=self.max_consecutive_fails,
         )
+
+        # 先清理上一个 Orchestrator 被杀后遗留的孤儿 train.py,
+        # 防止本轮调度与残留 trainer 并发抢 GPU。
+        self._reap_orphan_trainers()
 
         if self.dataset_gate_enabled:
             log("执行 Dataset Inspector 预检查...", "INFO")
@@ -563,15 +624,24 @@ class Orchestrator:
                         "OK",
                     )
                     
-                    # 如果没有任何 trial 完成，视为失败
-                    if result.n_completed == 0:
-                        log(f"HPO 扫描失败: 所有 {result.n_trials} 个 trial 均未完成", "CRIT")
-                        try:
-                            self.budget.release_reserved(run_id)
-                        except Exception:
-                            pass
-                        self.consecutive_fails += 1
-                        if self.consecutive_fails >= self.max_consecutive_fails:
+                    # 没有任何 trial 产出非空 metrics → 扫描视为失败。
+                    # 不能只看 n_completed==0: 失败 trial 也可能计入
+                    # completed, 导致 CDS=0.0000 被当成果提交。
+                    if self._hpo_sweep_produced_no_metrics(result):
+                        log(
+                            f"HPO 扫描失败: {result.n_trials} 个 trial 无一产出有效指标 "
+                            f"(completed={result.n_completed}, "
+                            f"with_metrics={getattr(result, 'n_with_metrics', '?')})",
+                            "CRIT",
+                        )
+                        self.events.emit(
+                            "hpo_failed",
+                            run_id=run_id,
+                            n_trials=result.n_trials,
+                            n_completed=result.n_completed,
+                            reason="no trial produced non-empty metrics",
+                        )
+                        if self._record_eval_failure(run_id, "hpo_no_valid_metrics"):
                             self.events.emit(
                                 "halt",
                                 reason=f"{self.max_consecutive_fails} consecutive failures",
@@ -685,11 +755,18 @@ class Orchestrator:
             fp_fn_data = eval_result.get("fp_fn_data", {})
 
             if not metrics:
-                log("评估失败", "CRIT")
-                self.budget.release_reserved(run_id)
-                self.consecutive_fails += 1
-                if self.consecutive_fails >= self.max_consecutive_fails:
+                # 评估空指标 = 实验失败。标记 failed、计连续失败、跳过
+                # git 自动提交 — 不再产生 "CDS=0.0000 completed" 假行。
+                log("评估失败: 返回空指标 — 实验标记为 failed, 跳过 git 提交", "CRIT")
+                if self._record_eval_failure(run_id, "eval_empty_metrics"):
+                    log(f"连续{self.max_consecutive_fails}次失败，停止迭代", "CRIT")
+                    self.events.emit(
+                        "halt",
+                        reason=f"{self.max_consecutive_fails} consecutive failures",
+                    )
+                    final_status = "max_consecutive_fails"
                     break
+                time.sleep(self.cooldown_sec)
                 continue
 
             cds = metrics.get("cds", 0)
@@ -836,11 +913,17 @@ class Orchestrator:
 
     def _git_commit(self, run_id: str, iteration: int, context: str,
                     metrics: dict = None, extra_detail: str = ""):
-        """Commit train.py + tracked artifacts and push, so every round is auditable."""
+        """Commit train.py + tracked artifacts and push, so every round is auditable.
+
+        只为产出了真实指标的实验提交。失败实验 (空 metrics / 无 cds 键)
+        一律跳过 — 否则 metrics.get("cds", 0) 会把失败伪装成 CDS=0.0000。
+        """
         import subprocess
 
-        if metrics is None:
-            metrics = {}
+        if not metrics or metrics.get("cds") is None:
+            log(f"git commit 跳过 ({context}, run_id={run_id}): "
+                f"无有效指标 — 失败实验不自动提交", "WARN")
+            return
 
         cds = metrics.get("cds", 0)
         p_val = metrics.get("precision", 0)

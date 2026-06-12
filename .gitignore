@@ -74,4 +74,5 @@ desktop.ini
 # ==================== Runtime state ====================
 autoresearch_v2/state/state.db-shm
 autoresearch_v2/state/state.db-wal
+reports/train.pid
 _check_shortcut.ps1

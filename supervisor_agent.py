@@ -212,11 +212,30 @@ class DecisionAuditor:
         return verdict, issues
 
 
-class SafetyGuard:
-    """安全守卫"""
+EMERGENCY_CRIT_THRESHOLD = 3
+EMERGENCY_WINDOW_SEC = 600          # 只统计最近10分钟内的 CRIT 违规
+VIOLATIONS_KEEP_MAX = 500           # 列表只为报告保留, 防止无限增长
 
-    def __init__(self):
+
+class SafetyGuard:
+    """安全守卫
+
+    紧急停止判定用「滑动窗口 + 恢复重置」: 只统计最近 window_sec 内、且晚于
+    最近一次恢复 (硬件检查全绿) 的 CRIT 违规。修复前 violations 是只增列表,
+    历史上累计 3 条 CRIT 后 should_emergency_stop 永远建议紧急停止,
+    即使硬件早已恢复 — 监督者从此每轮喊停, 触发无意义的重启循环。
+    """
+
+    def __init__(self, window_sec: float = EMERGENCY_WINDOW_SEC,
+                 crit_threshold: int = EMERGENCY_CRIT_THRESHOLD):
         self.violations = []
+        self.window_sec = window_sec
+        self.crit_threshold = crit_threshold
+        self.last_recovery_ts = None    # 最近一次硬件检查全绿的时刻
+
+    def record_recovery(self, now: float = None):
+        """硬件检查全绿 = 恢复。此前累计的违规不再计入紧急停止判定。"""
+        self.last_recovery_ts = time.time() if now is None else now
 
     def check_hardware(self):
         issues = []
@@ -247,9 +266,18 @@ class SafetyGuard:
             except Exception:
                 pass
 
+        if not issues:
+            self.record_recovery()
+
         for level, msg in issues:
-            self.violations.append({"timestamp": datetime.now().isoformat(), "level": level, "msg": msg})
+            self.violations.append({
+                "timestamp": datetime.now().isoformat(),
+                "ts": time.time(),
+                "level": level, "msg": msg,
+            })
             write_audit_record({"type": "safety", "level": level, "msg": msg, "timestamp": datetime.now().isoformat()})
+        if len(self.violations) > VIOLATIONS_KEEP_MAX:
+            self.violations = self.violations[-VIOLATIONS_KEEP_MAX:]
 
         return issues
 
@@ -279,10 +307,31 @@ class SafetyGuard:
 
         return issues
 
-    def should_emergency_stop(self):
-        crit_count = sum(1 for v in self.violations if v.get("level") == "CRIT")
-        if crit_count >= 3:
-            return True, "连续3次以上严重安全违规，建议紧急停止"
+    def _violation_ts(self, v) -> float:
+        """取违规时刻 (epoch 秒)。旧格式记录无 ts 字段时解析 isoformat;
+        解析不了视为过期 (宁可漏算也不永久喊停)。"""
+        ts = v.get("ts")
+        if ts is not None:
+            return float(ts)
+        try:
+            return datetime.fromisoformat(v["timestamp"]).timestamp()
+        except Exception:
+            return 0.0
+
+    def should_emergency_stop(self, now: float = None):
+        now = time.time() if now is None else now
+        cutoff = now - self.window_sec
+        if self.last_recovery_ts is not None:
+            cutoff = max(cutoff, self.last_recovery_ts)
+        crit_count = sum(
+            1 for v in self.violations
+            if v.get("level") == "CRIT" and self._violation_ts(v) > cutoff
+        )
+        if crit_count >= self.crit_threshold:
+            return True, (
+                f"最近{self.window_sec / 60:.0f}分钟内 {crit_count} 次严重安全违规"
+                f" (未恢复)，建议紧急停止"
+            )
         return False, ""
 
 
