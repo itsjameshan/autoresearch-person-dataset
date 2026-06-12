@@ -19,6 +19,8 @@ import threading
 from datetime import datetime
 from typing import Optional
 
+from . import train_guard
+
 TRAIN_SCRIPT = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "train.py"
 ))
@@ -173,32 +175,8 @@ def read_current_config(train_script: str = TRAIN_SCRIPT) -> dict:
     return config
 
 
-def run_training(train_script: str = TRAIN_SCRIPT,
-                 log_file: str = LOG_FILE,
-                 timeout: int = TRAIN_TIMEOUT,
-                 events_logger=None,
-                 quiet: bool = False) -> tuple[bool, str]:
-    """Run train.py as a subprocess, streaming stdout LIVE to the terminal.
-
-    The Windows GPU operator running the orchestrator from a single
-    terminal must see training progress in real time — they should NOT
-    have to open run.log in another window.
-
-    Each subprocess line is:
-      - written to log_file (unchanged from before; tooling expects it)
-      - printed to sys.stdout immediately, flushed (NEW)
-      - if it looks 'interesting' (epoch summary, error, metric line) AND
-        an events_logger is passed, also emitted as a train_progress
-        event into activity_events.jsonl.
-
-    Pass quiet=True to suppress the live print (e.g. for unit tests).
-    """
-    python = sys.executable
-    env = dict(os.environ)
-    env["PYTHONUNBUFFERED"] = "1"
-
-    # Note: We no longer remove the log file to avoid PermissionError on Windows
-    # The "w" mode in open() will automatically truncate it
+def _check_gpu_or_raise():
+    """GPU 前置检查 (从 run_training 抽出, 便于单测 stub)。"""
     try:
         import torch
         if torch.cuda.is_available():
@@ -221,6 +199,71 @@ def run_training(train_script: str = TRAIN_SCRIPT,
     except ImportError:
         raise RuntimeError("PyTorch is not installed. Please install PyTorch with CUDA support.")
 
+
+def run_training(train_script: str = TRAIN_SCRIPT,
+                 log_file: str = LOG_FILE,
+                 timeout: int = TRAIN_TIMEOUT,
+                 events_logger=None,
+                 quiet: bool = False,
+                 singleton_wait_sec: float = train_guard.SINGLETON_WAIT_SEC) -> tuple[bool, str]:
+    """Run train.py as a subprocess, streaming stdout LIVE to the terminal.
+
+    The Windows GPU operator running the orchestrator from a single
+    terminal must see training progress in real time — they should NOT
+    have to open run.log in another window.
+
+    Each subprocess line is:
+      - written to log_file (unchanged from before; tooling expects it)
+      - printed to sys.stdout immediately, flushed (NEW)
+      - if it looks 'interesting' (epoch summary, error, metric line) AND
+        an events_logger is passed, also emitted as a train_progress
+        event into activity_events.jsonl.
+
+    Pass quiet=True to suppress the live print (e.g. for unit tests).
+
+    单例守卫: spawn 前若已有存活 train.py (并发训练根因), 先限时等待
+    singleton_wait_sec 秒; 等不到就拒绝 spawn, 返回 (False, 原因) —
+    绝不与已存活 trainer 并发抢 GPU。
+    """
+    blockers = train_guard.find_live_trainers()
+    if blockers:
+        pids = [b["pid"] for b in blockers]
+        if not quiet:
+            print(
+                f"[train_dispatcher] another train.py is already running "
+                f"(pid={pids}) — waiting up to {singleton_wait_sec:.0f}s before spawning",
+                flush=True,
+            )
+        if events_logger is not None:
+            try:
+                events_logger.emit("train_singleton_wait", pids=pids,
+                                   wait_sec=singleton_wait_sec)
+            except Exception:
+                pass
+        remaining = train_guard.wait_for_trainers_to_exit(singleton_wait_sec)
+        if remaining:
+            pids = [b["pid"] for b in remaining]
+            msg = (
+                f"concurrent train.py still alive (pid={pids}) after "
+                f"{singleton_wait_sec:.0f}s — refusing to spawn a second trainer"
+            )
+            if not quiet:
+                print(f"[train_dispatcher] {msg}", flush=True)
+            if events_logger is not None:
+                try:
+                    events_logger.emit("train_singleton_blocked", pids=pids)
+                except Exception:
+                    pass
+            return False, msg
+
+    python = sys.executable
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+
+    # Note: We no longer remove the log file to avoid PermissionError on Windows
+    # The "w" mode in open() will automatically truncate it
+    _check_gpu_or_raise()
+
     proc = subprocess.Popen(
         [python, "-u", train_script],
         stdout=subprocess.PIPE,
@@ -231,6 +274,8 @@ def run_training(train_script: str = TRAIN_SCRIPT,
         errors="replace",
         bufsize=1,                  # line-buffered
     )
+    # reports/train.pid: 无 psutil 环境下其他进程探测并发 trainer 的唯一线索
+    train_guard.write_pid_file(proc.pid, train_script)
 
     timed_out = {"v": False}
 
@@ -256,24 +301,27 @@ def run_training(train_script: str = TRAIN_SCRIPT,
         r"target_met|fatal|error|traceback)",
         re.IGNORECASE,
     )
-    with open(log_file, "w", encoding="utf-8") as f:
-        for line in proc.stdout:
-            f.write(line)
-            f.flush()
-            if not quiet:
-                # Live to terminal — flushed every line so Windows
-                # operators see real-time progress in their cmd/PowerShell.
-                try:
-                    print(line.rstrip(), flush=True)
-                except UnicodeEncodeError:
-                    print(line.rstrip().encode('ascii', errors='replace').decode('ascii'), flush=True)
-            if events_logger is not None and interesting_re.search(line):
-                try:
-                    events_logger.emit("train_progress", line=line.rstrip())
-                except Exception:
-                    pass  # never let events writer break training stream
+    try:
+        with open(log_file, "w", encoding="utf-8") as f:
+            for line in proc.stdout:
+                f.write(line)
+                f.flush()
+                if not quiet:
+                    # Live to terminal — flushed every line so Windows
+                    # operators see real-time progress in their cmd/PowerShell.
+                    try:
+                        print(line.rstrip(), flush=True)
+                    except UnicodeEncodeError:
+                        print(line.rstrip().encode('ascii', errors='replace').decode('ascii'), flush=True)
+                if events_logger is not None and interesting_re.search(line):
+                    try:
+                        events_logger.emit("train_progress", line=line.rstrip())
+                    except Exception:
+                        pass  # never let events writer break training stream
 
-    proc.wait()
+        proc.wait()
+    finally:
+        train_guard.clear_pid_file(proc.pid)
 
     log_tail = ""
     if os.path.exists(log_file):
@@ -290,6 +338,9 @@ def run_training(train_script: str = TRAIN_SCRIPT,
 
 def _detect_root_cause(log_tail: str) -> str:
     """Classify a failed training log into a human-readable root_cause string."""
+    if re.search(r"concurrent train\.py|refusing to spawn a second trainer",
+                 log_tail, re.IGNORECASE):
+        return "concurrent_training"
     for pat in _DOWNLOAD_FAILURE_PATTERNS:
         if re.search(pat, log_tail, re.IGNORECASE):
             return "model_download_failed"

@@ -91,6 +91,10 @@ class OptunaSweepResult:
         self.best_trial_number: int = kw.get("best_trial_number", -1)
         self.n_trials: int = kw.get("n_trials", 0)
         self.n_completed: int = kw.get("n_completed", 0)
+        # n_with_metrics: 真正产出了非空 metrics 的 trial 数。failed/stale
+        # trial 可能混入 n_completed (历史 bug: CDS=0.0000 也算 completed),
+        # 判断 sweep 成败必须看这个数。
+        self.n_with_metrics: int = kw.get("n_with_metrics", 0)
         self.n_failed: int = kw.get("n_failed", 0)
         self.n_pruned: int = kw.get("n_pruned", 0)
         self.study_name: str = kw.get("study_name", "")
@@ -102,6 +106,7 @@ class OptunaSweepResult:
             "best_trial_number": self.best_trial_number,
             "n_trials": self.n_trials,
             "n_completed": self.n_completed,
+            "n_with_metrics": self.n_with_metrics,
             "n_failed": self.n_failed,
             "n_pruned": self.n_pruned,
             "study_name": self.study_name,
@@ -154,6 +159,7 @@ class OptunaRunner:
         self.study: Optional["optuna.Study"] = None
         self._n_failed = 0
         self._n_pruned = 0
+        self._n_with_metrics = 0
 
     # ── Internal helpers ────────────────────────────────────────────
 
@@ -165,10 +171,15 @@ class OptunaRunner:
         except Exception:
             pass
 
-    def _read_metrics(self) -> Optional[dict]:
+    def _read_metrics(self, fresh_after: Optional[float] = None) -> Optional[dict]:
+        """读 last_metrics.json。fresh_after 给定时, 文件 mtime 早于它即视为
+        上一轮残留的陈旧文件, 返回 None — 否则失败 trial 会捡到旧指标,
+        被当成 completed 记录 (CDS=0.0000 假完成行的来源之一)。"""
         if not os.path.exists(self.metrics_file):
             return None
         try:
+            if fresh_after is not None and os.path.getmtime(self.metrics_file) < fresh_after:
+                return None
             with open(self.metrics_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
@@ -185,6 +196,10 @@ class OptunaRunner:
     ) -> None:
         if self.state is None:
             return
+        if status == "completed" and not metrics:
+            # 空 metrics 绝不允许以 completed 入库 — 那就是results里
+            # CDS=0.0000 "completed" 假行的来源。
+            status = "failed"
         try:
             self.state.insert_experiment(
                 run_id=run_id,
@@ -272,7 +287,7 @@ class OptunaRunner:
             )
             raise optuna.TrialPruned("training failed")
 
-        metrics = self._read_metrics()
+        metrics = self._read_metrics(fresh_after=t0)
         if not metrics or "cds" not in metrics:
             self._n_failed += 1
             self._record_trial_in_state(
@@ -286,6 +301,7 @@ class OptunaRunner:
             raise optuna.TrialPruned("no metrics produced")
 
         cds = float(metrics.get("cds", 0.0))
+        self._n_with_metrics += 1
         self._record_trial_in_state(
             trial.number, run_id, params, metrics, "completed", gpu_min,
         )
@@ -362,6 +378,7 @@ class OptunaRunner:
             best_trial_number=best_trial_number,
             n_trials=len(self.study.trials),
             n_completed=len(completed),
+            n_with_metrics=self._n_with_metrics,
             n_failed=self._n_failed,
             n_pruned=self._n_pruned,
             study_name=self.study_name,

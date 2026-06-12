@@ -41,6 +41,11 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 V2_ROOT = os.path.join(PROJECT_ROOT, "autoresearch_v2")
 PYTHON = sys.executable
 
+try:
+    from autoresearch_v2.tools import train_guard
+except Exception:
+    train_guard = None
+
 TARGET_CDS = 0.85
 MAX_HOURS = 48
 HEALTH_CHECK_INTERVAL = 30
@@ -48,6 +53,12 @@ RESTART_BACKOFF_INITIAL = 5
 RESTART_BACKOFF_MAX = 300
 RESTART_BACKOFF_RESET = 180
 DEFAULT_WEB_PORT = 5050
+
+# 会 spawn train.py 的智能体 — 启/重启前必须确认没有存活 trainer,
+# 否则旧 trainer + 新 Orchestrator 再 spawn 的 trainer 会并发抢 GPU
+TRAINER_SPAWNING_AGENTS = {"Orchestrator"}
+# 重启前等待存活 trainer 退出的上限 (秒); 超时则放弃本次启动
+TRAINER_WAIT_ON_RESTART_SEC = 60
 
 STATE_DB = os.path.join(V2_ROOT, "state", "state.db")
 
@@ -162,6 +173,18 @@ class ManagedAgent:
         log(f"停止 [{self.name}]...", "STOP")
         try:
             if self.process.poll() is None:
+                # 先级联终止子进程树 (Windows 上 terminate 父进程不会
+                # 杀掉子进程 — Orchestrator 的 train.py 子进程会变孤儿,
+                # 与下一个 Orchestrator 的 trainer 并发抢 GPU)。
+                if train_guard is not None:
+                    try:
+                        killed = train_guard.terminate_tree(
+                            self.process.pid, include_parent=False,
+                        )
+                        if killed:
+                            log(f"[{self.name}] 已级联终止 {len(killed)} 个子进程: {killed}", "WARN")
+                    except Exception:
+                        pass
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=timeout)
@@ -780,6 +803,32 @@ class AgentOverseer:
                 return a
         return None
 
+    def _trainer_gate_ok(self, name: str,
+                         wait_sec: float = TRAINER_WAIT_ON_RESTART_SEC) -> bool:
+        """启动会 spawn train.py 的智能体前的单例闸门。
+
+        已有存活 trainer 时不立即启动: 限时等它退出; 等不到就放弃本次
+        (返回 False, 调用方/Doctor 稍后重试)。决不在已有 trainer 存活时
+        再叠一个 Orchestrator 上去 — 那就是 3 个并发 train.py 的根因。
+        """
+        if name not in TRAINER_SPAWNING_AGENTS or train_guard is None:
+            return True
+        try:
+            live = train_guard.find_live_trainers()
+            if not live:
+                return True
+            pids = [t.get("pid") for t in live]
+            log(f"检测到存活 train.py: pids={pids} — 等待最多 {wait_sec:.0f}s 再启动 [{name}]", "WARN")
+            remaining = train_guard.wait_for_trainers_to_exit(wait_sec)
+            if remaining:
+                pids = [t.get("pid") for t in remaining]
+                log(f"train.py 仍存活 (pids={pids})，本次不启动 [{name}]，稍后重试", "CRIT")
+                return False
+            return True
+        except Exception as e:
+            log(f"trainer 闸门检查异常: {e} — 放行", "WARN")
+            return True
+
     def start_agent(self, name: str) -> bool:
         agent = self._find_agent(name)
         if agent is None:
@@ -787,6 +836,8 @@ class AgentOverseer:
         if agent.is_alive():
             log(f"[{name}] 已在运行中", "WARN")
             return True
+        if not self._trainer_gate_ok(name):
+            return False
         return agent.launch()
 
     def stop_agent(self, name: str) -> bool:
@@ -803,6 +854,8 @@ class AgentOverseer:
         if agent.is_alive():
             agent.stop()
         time.sleep(2)
+        if not self._trainer_gate_ok(name):
+            return False
         return agent.launch()
 
     def launch_all(self) -> bool:
@@ -1033,11 +1086,10 @@ class AgentOverseer:
                     a.stop()
                 return jsonify({"ok": True, "action": "stop_all"})
             elif action == "restart":
+                # 经 restart_agent 走 trainer 单例闸门, 避免重启全员时
+                # 残留 train.py 与新 Orchestrator 的 trainer 并发
                 for a in overseer_ref.agents:
-                    if a.is_alive():
-                        a.stop()
-                    time.sleep(1)
-                    a.launch()
+                    overseer_ref.restart_agent(a.name)
                     time.sleep(1)
                 return jsonify({"ok": True, "action": "restart_all"})
             return jsonify({"ok": False, "error": "unknown action"}), 400
