@@ -3,17 +3,25 @@ import sys
 
 from ultralytics import YOLO
 from evaluate import evaluate_model, print_metrics
+from train_utils import resolve_model, resolve_data_yaml
 
 # ══════════════════════════════════════════════════════════════
 # EXPERIMENT CONFIG
 # ══════════════════════════════════════════════════════════════
 
-MODEL = "yolo12x.pt"
+# 5070 (12GB) 实测预算: yolo12x@batch2 一轮 32 epochs 远超调度器 2h 看门狗
+# → 每次都被 SIGKILL 记为 failed。改回 l + 提高 imgsz (small_obj_recall
+# 是 CDS 最大的洞), TIME_LIMIT_H 保证在看门狗之前优雅收尾。
+MODEL = "yolo12l.pt"
 DATA_YAML = "person_dataset/person.yaml"
-IMGSZ = 640
+IMGSZ = 960
 EPOCHS = 32
+# 训练墙钟上限 (小时)。必须 < train_dispatcher.TRAIN_TIMEOUT(2h) 留出
+# 模型加载/缓存/收尾评估的余量 — ultralytics 会在该时限内优雅停止并保存
+# best.pt, 实验以"完成+真实指标"落库, 而不是被看门狗杀掉记为 failed。
+TIME_LIMIT_H = 1.7
 
-BATCH = 2
+BATCH = 4
 import torch
 
 # Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
@@ -80,31 +88,22 @@ def _abs(rel_or_abs: str) -> str:
 
 
 def _resolve_model(model_name: str) -> str:
-    """Resolve model name to a path, falling back to largest available local model
-    if the requested model is not on disk (to avoid GitHub download failures)."""
-    model_path = _abs(model_name)
-    if os.path.isfile(model_path):
-        return model_path
-    
-    print(f"[WARN] Model {model_name!r} not found on disk, searching for fallback...")
-    available_models = []
-    for name in ["yolo12l.pt", "yolo12s.pt", "yolo12n.pt"]:
-        path = _abs(name)
-        if os.path.isfile(path):
-            available_models.append((name, path))
-    
-    if not available_models:
-        raise RuntimeError(f"No YOLO models found on disk. Cannot train.")
-    
-    best_model = sorted(available_models, key=lambda x: x[0])[-1]
-    print(f"[INFO] Falling back to {best_model[0]}")
-    return best_model[1]
+    """模型解析 (实现移到 train_utils.resolve_model: 显式容量优先级,
+    修掉旧版漏 yolo12x + 按字母序选'最大'的 bug)。"""
+    return resolve_model(model_name, _REPO_ROOT)
+
+
+def _resolved_data_yaml() -> str:
+    """把 person.yaml 的相对 `path:` 解析为绝对路径副本 — 相对路径由
+    ultralytics 按 datasets_dir 设置解析, 跨机器漂移是历史上反复出现的
+    '图片路径'失败根因。"""
+    return resolve_data_yaml(_abs(DATA_YAML), _abs(PROJECT))
 
 
 def train():
     model_path = _resolve_model(MODEL)
-    data_yaml = _abs(DATA_YAML)
-    
+    data_yaml = _resolved_data_yaml()
+
     print(f"[INFO] Training configuration:")
     print(f"  Model: {model_path}")
     print(f"  Data: {data_yaml}")
@@ -118,7 +117,11 @@ def train():
     results = model.train(
         data=data_yaml,
         epochs=EPOCHS,
-        imgsz = 640,
+        # 必须用 IMGSZ 变量 — 之前硬编码 640, Researcher/HPO 调 IMGSZ
+        # 完全不生效, small_obj_recall 一直 ~0 (CDS 的 15% 直接归零)
+        imgsz=IMGSZ,
+        # 墙钟上限: 在调度器看门狗 SIGKILL 之前优雅收尾 (覆盖 epochs)
+        time=TIME_LIMIT_H,
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
@@ -172,7 +175,7 @@ def train():
 
 if __name__ == "__main__":
     best_pt, epochs_completed = train()
-    data_yaml_path = _abs(DATA_YAML)
+    data_yaml_path = _resolved_data_yaml()
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
 

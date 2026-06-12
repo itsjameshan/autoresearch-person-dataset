@@ -332,6 +332,13 @@ def run_training(train_script: str = TRAIN_SCRIPT,
         except Exception:
             pass
 
+    if timed_out["v"]:
+        # 看门狗 kill 的提示只打到 stdout, 不进 run.log → root_cause
+        # 一直被判成 unknown。补进 log_tail 让 _detect_root_cause 命中
+        # training_timeout, triage 才能对症 (降 epochs/imgsz 而不是瞎猜)。
+        log_tail += (f"\n[train_dispatcher] training timed_out after "
+                     f"{timeout}s and was killed")
+
     success = proc.returncode == 0 and not timed_out["v"]
     return success, log_tail
 
