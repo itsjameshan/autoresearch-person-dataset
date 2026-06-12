@@ -75,4 +75,6 @@ desktop.ini
 autoresearch_v2/state/state.db-shm
 autoresearch_v2/state/state.db-wal
 reports/train.pid
+_quarantine/
+person_dataset/_quarantine/
 _check_shortcut.ps1

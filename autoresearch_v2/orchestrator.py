@@ -174,6 +174,7 @@ class Orchestrator:
         self.auto_approve_hitl = bool(config.get("auto_approve_hitl", True))
         self.data_yaml = config.get("data_yaml", DEFAULT_DATA_YAML)
         self.dataset_gate_enabled = bool(config.get("dataset_gate_enabled", True))
+        self.dataset_repair_enabled = bool(config.get("dataset_repair_enabled", True))
         self.reports_dir = config.get(
             "reports_dir",
             os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reports")),
@@ -226,6 +227,38 @@ class Orchestrator:
             log(f"检测到仍存活的 train.py (有存活父进程, 不抢杀): pids={pids} "
                 f"— 调度训练前将等待其退出", "WARN")
             self.events.emit("live_trainers_detected", pids=pids)
+
+    def _run_dataset_repair(self):
+        """启动时自动修数据 (幂等、只隔离不删除): train/val 内容相同的
+        同名文件隔离 (泄漏), 坏标签行纠正/clamp。失败绝不阻塞训练。"""
+        try:
+            from autoresearch_v2 import dataset_repair
+        except Exception:
+            return
+        try:
+            report = dataset_repair.repair_dataset(self.data_yaml,
+                                                   reports_dir=self.reports_dir)
+        except Exception as e:
+            log(f"数据集修复跳过 (出错): {e}", "WARN")
+            return
+        dup = report.get("duplicates", {})
+        labels = report.get("labels", {})
+        if report.get("changed"):
+            log(f"数据集修复: 隔离 train/val 重复 {dup.get('identical_quarantined', 0)} 个, "
+                f"修标签 {labels.get('files_changed', 0)} 个文件", "OK")
+        else:
+            log("数据集修复: 无需改动", "INFO")
+        if labels.get("unlabeled_splits"):
+            log(f"无标签 split (评估将跳过): {labels['unlabeled_splits']}", "WARN")
+        self.events.emit(
+            "dataset_repair",
+            changed=bool(report.get("changed")),
+            duplicates_quarantined=dup.get("identical_quarantined", 0),
+            same_name_diff_content=dup.get("same_name_diff_content", 0),
+            label_files_changed=labels.get("files_changed", 0),
+            unlabeled_splits=labels.get("unlabeled_splits", {}),
+            report_json=report.get("report_json", ""),
+        )
 
     def _record_eval_failure(self, run_id: str, reason: str) -> bool:
         """评估产出空指标 → 实验记为 failed (绝不让空 metrics 以 completed
@@ -409,6 +442,10 @@ class Orchestrator:
         # 先清理上一个 Orchestrator 被杀后遗留的孤儿 train.py,
         # 防止本轮调度与残留 trainer 并发抢 GPU。
         self._reap_orphan_trainers()
+
+        # 数据修复放在 dataset gate 之前 — gate 检查的应是修复后的状态
+        if self.dataset_repair_enabled:
+            self._run_dataset_repair()
 
         if self.dataset_gate_enabled:
             log("执行 Dataset Inspector 预检查...", "INFO")
@@ -1018,6 +1055,8 @@ def main():
                         help="禁用自动审批，改为人工审批")
     parser.add_argument("--skip-dataset-gate", action="store_true",
                         help="跳过启动前的数据质量检查")
+    parser.add_argument("--skip-dataset-repair", action="store_true",
+                        help="跳过启动前的数据集自动修复 (泄漏隔离/标签纠正)")
     parser.add_argument("--overfitting-gap", type=float, default=OVERFITTING_GAP_THRESHOLD,
                         help="过拟合检测阈值 (val-test gap)")
     parser.add_argument("--overfitting-action", type=float, default=OVERFITTING_ACTION_THRESHOLD,
@@ -1040,6 +1079,7 @@ def main():
         "cooldown_sec": args.cooldown,
         "auto_approve_hitl": not args.manual_hitl,
         "dataset_gate_enabled": not args.skip_dataset_gate,
+        "dataset_repair_enabled": not args.skip_dataset_repair,
         "overfitting_gap_threshold": args.overfitting_gap,
         "overfitting_action_threshold": args.overfitting_action,
         "report_interval_hours": args.report_interval_hours,

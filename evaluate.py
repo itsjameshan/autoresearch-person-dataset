@@ -230,6 +230,18 @@ def _evaluate_on_split(model, data_dir, split_name, data_cfg, imgsz, deploy_conf
         print(f"evaluate: no {split_name} images found in {img_dir}")
         return None
 
+    # 无标签的 split (如 test 缺全部标签) 必须跳过: 否则每张图 GT=0,
+    # 模型有检出 → acc=0/recall=0 的垃圾指标被当真 → val_test_gap 虚高
+    # → 每轮都误报"过拟合", 还白白多跑几百张图的推理。
+    n_label_files = sum(
+        1 for img_path in images
+        if (label_dir / f"{Path(img_path).stem}.txt").exists()
+    )
+    if n_label_files == 0:
+        print(f"evaluate: {split_name} split has {len(images)} images but "
+              f"0 label files in {label_dir} — skipping unlabeled split")
+        return None
+
     per_image_accs = []
     counting_errors = []
     small_gt_total = 0
@@ -475,16 +487,23 @@ def evaluate_model(model_path, data_yaml, imgsz=1280):
         "latency_gate": latency_gate,
         "latency_gate_ms": round(gate_ms, 1),
         "target_met": target_met,
-        # Test set metrics
-        "test_counting_acc": round(test_metrics["counting_acc"], 4) if test_metrics else None,
-        "test_counting_mae": round(test_metrics["counting_mae"], 4) if test_metrics else None,
-        "test_small_obj_recall": round(test_metrics["small_obj_recall"], 4) if test_metrics else None,
-        "test_precision": round(test_metrics["precision"], 4) if test_metrics else None,
-        "test_recall": round(test_metrics["recall"], 4) if test_metrics else None,
-        "test_n_images": test_metrics["n_images"] if test_metrics else 0,
-        "val_test_gap": round(val_test_gap, 4),
-        "overfitting_detected": overfitting_detected,
     }
+
+    # Test set metrics — 只在 test split 真有标签时输出。无标签时整组键
+    # 省略 (不是置 None): orchestrator 按 `"test_counting_acc" in metrics`
+    # 判断, None 值会让它格式化时崩溃; val_test_gap/overfitting_detected
+    # 缺省时下游按 0.0/False 处理。
+    if test_metrics:
+        metrics.update({
+            "test_counting_acc": round(test_metrics["counting_acc"], 4),
+            "test_counting_mae": round(test_metrics["counting_mae"], 4),
+            "test_small_obj_recall": round(test_metrics["small_obj_recall"], 4),
+            "test_precision": round(test_metrics["precision"], 4),
+            "test_recall": round(test_metrics["recall"], 4),
+            "test_n_images": test_metrics["n_images"],
+            "val_test_gap": round(val_test_gap, 4),
+            "overfitting_detected": overfitting_detected,
+        })
 
     # ── Persist metrics to JSON for robust downstream parsing ──
     try:

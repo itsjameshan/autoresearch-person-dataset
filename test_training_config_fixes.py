@@ -211,6 +211,17 @@ class TestTrainPyWiring:
         assert str(cfg["MODEL"]).endswith(".pt")
         assert cfg["IMGSZ"] >= 640
 
+    def test_evaluate_skips_unlabeled_split(self):
+        # evaluate.py 顶层 import torch/ultralytics, 本环境只能做源码守卫:
+        # 无标签 split (test 缺 431 个标签) 必须跳过, 否则全 0 GT 的垃圾
+        # 指标 → val_test_gap 虚高 → 每轮误报过拟合
+        src = open(os.path.join(REPO_ROOT, "evaluate.py"), encoding="utf-8").read()
+        assert "skipping unlabeled split" in src
+        assert re.search(r"if n_label_files == 0:\s*\n", src)
+        # test_* 键必须整组省略而不是置 None (orchestrator 对 None 格式化会崩)
+        assert 'if test_metrics else None' not in src
+        assert re.search(r"if test_metrics:\s*\n\s+metrics\.update", src)
+
     def test_imgsz_knob_round_trips_via_config_diff(self, tmp_path):
         # 端到端: Researcher/HPO 改 IMGSZ → 配置真的变 (以前改了也没用)
         copy = str(tmp_path / "train_copy.py")
