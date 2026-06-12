@@ -52,7 +52,7 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 0.0030710573677773722
+LR0 = 7.012711284048462e-05
 LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
@@ -62,13 +62,13 @@ TRANSLATE = 0.3
 SCALE = 0.5
 FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 0.8123957592679836
+MOSAIC = 0.9653455441872767
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
 CLOSE_MOSAIC = 15
 
-BOX = 19.260714596148745
+BOX = 19.596278648369893
 CLS = 1.0
 
 CONF = 0.001
@@ -182,4 +182,14 @@ if __name__ == "__main__":
     try:
         torch.cuda.empty_cache()
     except:
-        pass
+        passcurrent_epochs = 100
+suggested_epochs = 100
+current_lr0 = 0.01
+suggested_lr0 = 0.005
+reason = "Increase batch size to reduce memory pressure.  Retain current epochs and LR0. Increase image size to allow for more detail and potentially alleviate pressure.  This action directly addresses the crash reported by the Orchestrator."
+batch_size_suggestion = 16
+current_epochs = 100
+current_imgsz = 640
+suggested_imgsz = 1280
+current_batch = 16
+suggested_batch = 32
