@@ -78,3 +78,7 @@ reports/train.pid
 _quarantine/
 person_dataset/_quarantine/
 _check_shortcut.ps1
+doctor.log
+bugfixer.log
+overseer.log
+supervisor.log

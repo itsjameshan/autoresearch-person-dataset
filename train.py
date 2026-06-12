@@ -52,7 +52,9 @@ SINGLE_CLS = True
 COS_LR = True
 PATIENCE = 30
 
-LR0 = 7.012711284048462e-05
+# 7e-05 是 doctor 反复 lr_half 留下的残值 (远低于 HPO 搜索下界 0.001),
+# 那些 crash 的真因是超时/并发, 已修。回到 HPO 实测较优的量级。
+LR0 = 0.003
 LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
@@ -182,14 +184,5 @@ if __name__ == "__main__":
     try:
         torch.cuda.empty_cache()
     except:
-        passcurrent_epochs = 100
-suggested_epochs = 100
-current_lr0 = 0.01
-suggested_lr0 = 0.005
-reason = "Increase batch size to reduce memory pressure.  Retain current epochs and LR0. Increase image size to allow for more detail and potentially alleviate pressure.  This action directly addresses the crash reported by the Orchestrator."
-batch_size_suggestion = 16
-current_epochs = 100
-current_imgsz = 640
-suggested_imgsz = 1280
-current_batch = 16
-suggested_batch = 32
+        pass
+

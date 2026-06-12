@@ -23,6 +23,8 @@ import yaml
 
 from train_utils import resolve_data_yaml, resolve_model, MODEL_PREFERENCE
 from autoresearch_v2.tools import train_dispatcher, train_guard
+from autoresearch_v2.agents.bug_fixer import DeepFixer
+from autoresearch_v2.agents.overseer_doctor import FixExecutor
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 TRAIN_PY = os.path.join(REPO_ROOT, "train.py")
@@ -232,3 +234,89 @@ class TestTrainPyWiring:
         src = open(copy, encoding="utf-8").read()
         assert re.search(r"imgsz\s*=\s*IMGSZ\s*,", src), \
             "config_diff 不应破坏 model.train 的 imgsz=IMGSZ 接线"
+
+    def test_train_py_free_of_llm_suggestion_junk(self, src):
+        # 2026-06-12 box 实测: 旧 _write_train_param 把 LLM 叙述字段
+        # (suggested_* / reason / current_epochs) 黏到 train.py 末尾
+        for junk in ("suggested_", "passcurrent", "batch_size_suggestion"):
+            assert junk not in src, f"train.py 残留 agent 写入的垃圾: {junk}"
+        assert src.endswith("\n"), "train.py 必须以换行结尾 (防黏连)"
+        compile(src, TRAIN_PY, "exec")
+
+
+# ════════════════════════════════════════════════════════════════════
+# agent _write_train_param 加固 — 不再把 LLM 垃圾键 append 进 train.py
+# ════════════════════════════════════════════════════════════════════
+
+SAMPLE_TRAIN = (
+    'import os\n'
+    '\n'
+    'MODEL = "yolo12l.pt"\n'
+    'IMGSZ = 960\n'
+    'EPOCHS = 32\n'
+    '\n'
+    'def train():\n'
+    '    return 1\n'
+    '\n'
+    'if __name__ == "__main__":\n'
+    '    try:\n'
+    '        train()\n'
+    '    except:\n'
+    '        pass'      # 故意不带末尾换行 — 真实的黏连场景
+)
+
+
+def make_writer(cls, train_script):
+    w = object.__new__(cls)
+    w.train_script = train_script
+    return w
+
+
+@pytest.mark.parametrize("cls", [DeepFixer, FixExecutor],
+                         ids=["bug_fixer.DeepFixer", "doctor.FixExecutor"])
+class TestWriteTrainParamGuard:
+    def _setup(self, tmp_path, cls):
+        script = str(tmp_path / "train.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(SAMPLE_TRAIN)
+        return make_writer(cls, script), script
+
+    def _read(self, script):
+        return open(script, encoding="utf-8").read()
+
+    def test_updates_existing_key_in_place(self, tmp_path, cls):
+        w, script = self._setup(tmp_path, cls)
+        assert w._write_train_param("EPOCHS", 64) is True
+        src = self._read(script)
+        assert "EPOCHS = 64" in src and "EPOCHS = 32" not in src
+        compile(src, script, "exec")
+
+    def test_new_key_inserted_in_config_region_not_eof(self, tmp_path, cls):
+        w, script = self._setup(tmp_path, cls)
+        assert w._write_train_param("PATIENCE", 50) is True
+        src = self._read(script)
+        assert src.index("PATIENCE = 50") < src.index("def train"), \
+            "新配置键必须插入配置区, 不能落到文件末尾"
+        assert "passPATIENCE" not in src and "pass" in src.splitlines()[-1]
+        compile(src, script, "exec")
+
+    def test_llm_junk_keys_rejected(self, tmp_path, cls):
+        w, script = self._setup(tmp_path, cls)
+        before = self._read(script)
+        for junk_key in ("current_epochs", "suggested_lr0", "reason",
+                         "batch_size_suggestion", "Imgsz", ""):
+            assert w._write_train_param(junk_key, 100) is False
+        assert self._read(script) == before, "垃圾键不得改动 train.py 一个字节"
+
+    def test_multiline_string_value_rejected(self, tmp_path, cls):
+        w, script = self._setup(tmp_path, cls)
+        before = self._read(script)
+        assert w._write_train_param("NAME", "a\nINJECTED = 1") is False
+        assert self._read(script) == before
+
+    def test_no_glue_when_file_lacks_trailing_newline(self, tmp_path, cls):
+        w, script = self._setup(tmp_path, cls)
+        assert w._write_train_param("WORKERS", 4) is True
+        src = self._read(script)
+        assert "passWORKERS" not in src
+        compile(src, script, "exec")

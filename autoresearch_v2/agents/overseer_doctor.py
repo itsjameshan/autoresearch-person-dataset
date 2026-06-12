@@ -603,27 +603,37 @@ class FixExecutor:
         return default
 
     def _write_train_param(self, key: str, value):
+        # 同 bug_fixer: 只接受全大写配置键, 未知键插入配置区而非 append 到
+        # 文件末尾。fix_config 会把 LLM fix_detail 整个 dict 逐键写入,
+        # 旧版把 current_epochs / reason 等叙述字段黏到 train.py 末行,
+        # 直接写坏训练脚本 (2026-06-12 box 实测)。
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key or ""):
+            log(f"拒绝写入非配置键到 train.py: {key!r}", "WARN")
+            return False
+        if isinstance(value, str) and ("\n" in value or "\r" in value):
+            log(f"拒绝写入含换行的值到 train.py: {key}", "WARN")
+            return False
         try:
             with open(self.train_script, "r", encoding="utf-8") as f:
                 lines = f.readlines()
+            if isinstance(value, str):
+                new_line = f'{key} = "{value}"\n'
+            else:
+                new_line = f"{key} = {repr(value)}\n"
             found = False
+            last_config_idx = -1
             for i, line in enumerate(lines):
                 if re.match(rf"^{key}\s*=", line.strip()):
-                    if isinstance(value, str):
-                        lines[i] = f'{key} = "{value}"\n'
-                    elif isinstance(value, bool):
-                        lines[i] = f"{key} = {repr(value)}\n"
-                    else:
-                        lines[i] = f"{key} = {repr(value)}\n"
+                    lines[i] = new_line
                     found = True
                     break
+                if re.match(r"^[A-Z][A-Z0-9_]*\s*=", line):
+                    last_config_idx = i
             if not found:
-                if isinstance(value, str):
-                    lines.append(f'{key} = "{value}"\n')
-                elif isinstance(value, bool):
-                    lines.append(f"{key} = {repr(value)}\n")
-                else:
-                    lines.append(f"{key} = {repr(value)}\n")
+                insert_at = last_config_idx + 1 if last_config_idx >= 0 else 0
+                if insert_at > 0 and not lines[insert_at - 1].endswith("\n"):
+                    lines[insert_at - 1] += "\n"
+                lines.insert(insert_at, new_line)
             with open(self.train_script, "w", encoding="utf-8") as f:
                 f.writelines(lines)
             return True
