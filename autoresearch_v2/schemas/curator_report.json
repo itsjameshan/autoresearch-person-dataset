@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CuratorReport",
+  "type": "object",
+  "required": ["worst_failure_modes", "suspected_label_errors", "underrepresented_scenarios"],
+  "properties": {
+    "worst_failure_modes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "estimated_impact"],
+        "properties": {
+          "pattern": {"type": "string"},
+          "evidence_image_ids": {"type": "array", "items": {"type": "string"}},
+          "estimated_impact": {"type": "string"}
+        }
+      }
+    },
+    "suspected_label_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["image_path", "reason"],
+        "properties": {
+          "image_path": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "underrepresented_scenarios": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "dedup_candidates": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "recommended_next_collection": {
+      "type": "string"
+    }
+  }
+}

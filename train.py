@@ -1,107 +1,136 @@
-"""
-train.py — THE ONE FILE the agent modifies.
-
-Each experiment: change hyperparams/model/augmentation here, then run:
-  python train.py > run.log 2>&1
-
-After training, this script calls evaluate_model() and prints structured
-metrics for the autoresearch loop to parse via grep.
-
-DO NOT modify: evaluate.py, deployment thresholds, CDS weights, quality gates.
-"""
-
 import os
 import sys
-import torch
-import ultralytics
-
-# ── Fix torch.load for newer PyTorch ──
-_original_load = torch.load
-def _safe_load(*args, **kwargs):
-    kwargs.setdefault("weights_only", False)
-    return _original_load(*args, **kwargs)
-torch.load = _safe_load
 
 from ultralytics import YOLO
 from evaluate import evaluate_model, print_metrics
 
 # ══════════════════════════════════════════════════════════════
-# EXPERIMENT CONFIG — Agent modifies this section
+# EXPERIMENT CONFIG
 # ══════════════════════════════════════════════════════════════
 
-# Model
-MODEL = "yolov8s.pt"
+MODEL = "yolo12x.pt"
+DATA_YAML = "person_dataset/person.yaml"
+IMGSZ = 640
+EPOCHS = 32
 
-# Dataset
-DATA_YAML = "person.yaml"
-IMGSZ = 1280
+BATCH = 2
+import torch
 
-# Training
-EPOCHS = 100
-BATCH = 8
-PATIENCE = 30
-DEVICE = "mps"  # Apple Silicon GPU
+# Auto-detect compatible device (handles RTX 50-series sm_120 compatibility)
+def _get_compatible_device():
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Training requires a GPU. "
+            "Please install a CUDA-capable PyTorch version."
+        )
+    cc = torch.cuda.get_device_capability()
+    major, minor = cc
+    compute_capability = major * 10 + minor  # e.g. (8,6) -> 86
+    # Check PyTorch CUDA version to determine max supported CC
+    pt_cuda_ver = float(torch.version.cuda) if torch.version.cuda else 0.0
+    max_supported_cc = 90 if pt_cuda_ver < 13.0 else 120
+    if compute_capability > max_supported_cc:
+        raise RuntimeError(
+            f"GPU CC {major}.{minor} (sm_{compute_capability}) exceeds PyTorch max supported CC {max_supported_cc}. "
+            f"Training stopped. To use GPU, install PyTorch with CUDA 13.x or newer."
+        )
+    return 0
 
-# Learning rate
-LR0 = 0.01
-LRF = 0.01
+DEVICE = _get_compatible_device()
+AMP = False
+CACHE = "disk"
+WORKERS = 4
+SINGLE_CLS = True
 COS_LR = True
+PATIENCE = 30
 
-# Data augmentation
+LR0 = 0.0030710573677773722
+LRF = 0.37261932455399976
 HSV_H = 0.015
 HSV_S = 0.7
 HSV_V = 0.4
-DEGREES = 5.0
-TRANSLATE = 0.1
+DEGREES = 10.0
+TRANSLATE = 0.3
 SCALE = 0.5
-FLIPUD = 0.5
+FLIPUD = 0.0
 FLIPLR = 0.5
-MOSAIC = 1.0
+MOSAIC = 0.8123957592679836
 MIXUP = 0.1
 COPY_PASTE = 0.1
 ERASING = 0.4
-CLOSE_MOSAIC = 20
+CLOSE_MOSAIC = 15
 
-# Loss weights
-BOX = 7.5
-CLS = 0.5
+BOX = 19.260714596148745
+CLS = 1.0
 
-# Other
-AMP = True
-CACHE = False  # "ram" uses too much on 8GB M1
-WORKERS = 0
-SINGLE_CLS = True
-
-# ══════════════════════════════════════════════════════════════
-# TRAINING — do not modify below this line
-# ══════════════════════════════════════════════════════════════
+CONF = 0.001
+IOU = 0.5
 
 PROJECT = "autoresearch_runs"
-NAME = "current"
+NAME = "exp_mosaic_boost_v6"
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+LLM_BACKEND = "ollama"
+
+
+def _abs(rel_or_abs: str) -> str:
+    if os.path.isabs(rel_or_abs):
+        return os.path.normpath(rel_or_abs)
+    return os.path.normpath(os.path.join(_REPO_ROOT, rel_or_abs))
+
+
+def _resolve_model(model_name: str) -> str:
+    """Resolve model name to a path, falling back to largest available local model
+    if the requested model is not on disk (to avoid GitHub download failures)."""
+    model_path = _abs(model_name)
+    if os.path.isfile(model_path):
+        return model_path
+    
+    print(f"[WARN] Model {model_name!r} not found on disk, searching for fallback...")
+    available_models = []
+    for name in ["yolo12l.pt", "yolo12s.pt", "yolo12n.pt"]:
+        path = _abs(name)
+        if os.path.isfile(path):
+            available_models.append((name, path))
+    
+    if not available_models:
+        raise RuntimeError(f"No YOLO models found on disk. Cannot train.")
+    
+    best_model = sorted(available_models, key=lambda x: x[0])[-1]
+    print(f"[INFO] Falling back to {best_model[0]}")
+    return best_model[1]
 
 
 def train():
-    model = YOLO(MODEL)
+    model_path = _resolve_model(MODEL)
+    data_yaml = _abs(DATA_YAML)
+    
+    print(f"[INFO] Training configuration:")
+    print(f"  Model: {model_path}")
+    print(f"  Data: {data_yaml}")
+    print(f"  Image size: {IMGSZ}")
+    print(f"  Batch size: {BATCH}")
+    print(f"  Epochs: {EPOCHS}")
+    print(f"  Device: {DEVICE}")
+    
+    model = YOLO(model_path)
 
     results = model.train(
-        data=DATA_YAML,
+        data=data_yaml,
         epochs=EPOCHS,
-        imgsz=IMGSZ,
+        imgsz = 640,
         batch=BATCH,
         device=DEVICE,
         patience=PATIENCE,
         project=PROJECT,
         name=NAME,
         exist_ok=True,
-
         single_cls=SINGLE_CLS,
-        conf=0.001,
-        iou=0.6,
-
+        conf=CONF,
+        iou=IOU,
         lr0=LR0,
         lrf=LRF,
         cos_lr=COS_LR,
-
         hsv_h=HSV_H,
         hsv_s=HSV_S,
         hsv_v=HSV_V,
@@ -109,16 +138,13 @@ def train():
         translate=TRANSLATE,
         scale=SCALE,
         flipud=FLIPUD,
-        fliplr=FLIPLR,
         mosaic=MOSAIC,
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
         erasing=ERASING,
         close_mosaic=CLOSE_MOSAIC,
-
         box=BOX,
         cls=CLS,
-
         amp=AMP,
         cache=CACHE,
         workers=WORKERS,
@@ -128,33 +154,29 @@ def train():
         verbose=True,
     )
 
-    # Find best model
-    best_pt = os.path.join(PROJECT, NAME, "weights", "best.pt")
+    try:
+        save_dir = str(results.save_dir)
+    except Exception:
+        save_dir = os.path.join(PROJECT, NAME)
+    best_pt = os.path.join(save_dir, "weights", "best.pt")
     if not os.path.exists(best_pt):
-        best_pt = os.path.join(PROJECT, NAME, "weights", "last.pt")
+        best_pt = os.path.join(save_dir, "weights", "last.pt")
 
-    # Get epochs completed from results
     try:
         epochs_completed = results.epoch
     except Exception:
-        epochs_completed = EPOCHS
+        epochs_completed = 0
 
     return best_pt, epochs_completed
 
 
 if __name__ == "__main__":
-    print(f"=== Autoresearch Experiment ===")
-    print(f"Model: {MODEL}")
-    print(f"Epochs: {EPOCHS}, Batch: {BATCH}, ImgSz: {IMGSZ}")
-    print(f"LR: {LR0} → {LRF}, CosLR: {COS_LR}")
-    print(f"Augmentation: mosaic={MOSAIC} mixup={MIXUP} copy_paste={COPY_PASTE}")
-    print(f"Loss: box={BOX} cls={CLS}")
-    print()
-
     best_pt, epochs_completed = train()
-
-    print()
-    print(f"=== Evaluation (model: {best_pt}) ===")
-    data_yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), DATA_YAML)
+    data_yaml_path = _abs(DATA_YAML)
     metrics = evaluate_model(best_pt, data_yaml_path, IMGSZ)
     print_metrics(metrics, epochs_completed)
+
+    try:
+        torch.cuda.empty_cache()
+    except:
+        pass

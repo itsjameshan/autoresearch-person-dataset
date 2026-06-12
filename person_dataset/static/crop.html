@@ -1,0 +1,278 @@
+<!-- static/crop.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>步骤1：大图裁剪与空图筛选</title>
+    <link rel="stylesheet" href="/static/css/workflow.css">
+    <style>
+        .workflow-container {
+            max-width: 800px;
+            margin: 30px auto;
+            background: white;
+            border-radius: 24px;
+            padding: 24px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+        }
+        .workflow-header {
+            margin-bottom: 24px;
+        }
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #6c757d;
+        }
+        .step.active {
+            color: #2d6a4f;
+            font-weight: bold;
+        }
+        .step.completed {
+            color: #2d6a4f;
+        }
+        .step-number {
+            width: 28px;
+            height: 28px;
+            background: #dee2e6;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        .step.active .step-number {
+            background: #2d6a4f;
+            color: white;
+        }
+        .step.completed .step-number {
+            background: #2d6a4f;
+            color: white;
+        }
+        .arrow {
+            font-size: 18px;
+            color: #adb5bd;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .input-with-button {
+            display: flex;
+            gap: 8px;
+        }
+        .input-with-button input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            background: #f8f9fa;
+        }
+        .input-with-button button {
+            padding: 8px 16px;
+            background: #e9ecef;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .input-with-button button:hover {
+            background: #dee2e6;
+        }
+        .mode-selector {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #f8fafc;
+            border-radius: 12px;
+        }
+        .mode-selector label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            font-weight: normal;
+        }
+        .param-row {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 15px;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .progress-area {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 8px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+        .log-entry {
+            margin-bottom: 4px;
+        }
+        .log-info { color: #b9f6ca; }
+        .log-success { color: #69f0ae; }
+        .log-error { color: #ff8a80; }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+        button.primary {
+            background: #2d6a4f;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 30px;
+            cursor: pointer;
+        }
+        button.primary:disabled {
+            background: #9cb8aa;
+            cursor: not-allowed;
+        }
+        button.secondary {
+            background: #e9ecef;
+            color: #333;
+            border: none;
+            padding: 10px 24px;
+            border-radius: 30px;
+            cursor: pointer;
+        }
+        button.secondary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .note {
+            font-size: 12px;
+            color: #6c757d;
+            margin-top: 4px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="workflow-container">
+        <div class="workflow-header">
+            <h1>🏟️ 体育场人群检测 · 裁剪</h1>
+            <div class="step-indicator">
+                <div class="step active">
+                    <span class="step-number">1</span> 裁剪筛选
+                </div>
+                <span class="arrow">→</span>
+                <div class="step">
+                    <span class="step-number">2</span> 检测
+                </div>
+                <span class="arrow">→</span>
+                <div class="step">
+                    <span class="step-number">3</span> 重建
+                </div>
+            </div>
+        </div>
+
+        <!-- 模式切换 -->
+        <div class="mode-selector">
+            <label>
+                <input type="radio" name="workMode" value="batch" checked> 批量裁剪检测（多张大图）
+            </label>
+            <label>
+                <input type="radio" name="workMode" value="single"> 单张图片检测（裁剪）
+            </label>
+        </div>
+
+        <!-- 批量模式区域 -->
+        <div id="batchModeArea">
+            <div class="form-group">
+                <label>📁 选择原始大图文件夹（本地）</label>
+                <div class="input-with-button">
+                    <input type="text" id="srcFolderDisplay" placeholder="未选择任何文件夹" readonly>
+                    <button type="button" id="selectSrcLocalBtn">📂 选择文件夹</button>
+                </div>
+                <div class="note">* 请选择您电脑上存放原始大图的文件夹，将自动上传并处理</div>
+            </div>
+
+            <div class="param-row">
+                <div class="form-group">
+                    <label>📏 小图尺寸 (像素)</label>
+                    <input type="number" id="tileSize" value="1280" min="640" max="2048" step="32">
+                </div>
+                <div class="form-group">
+                    <label>🔲 重叠像素</label>
+                    <input type="number" id="overlap" value="200" min="0" max="500" step="10">
+                </div>
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="filterEmpty" checked>
+                <label for="filterEmpty">🗑️ 自动过滤空图（无人体背景）</label>
+            </div>
+            <div class="note">* 空图筛选基于图像方差，阈值可后续在代码中调整</div>
+        </div>
+
+        <!-- 单张模式区域（与批量模式参数完全一致） -->
+        <div id="singleModeArea" class="hidden">
+            <div class="form-group">
+                <label>🖼️ 选择单张图片</label>
+                <div class="input-with-button">
+                    <input type="text" id="singleFileDisplay" placeholder="未选择任何图片" readonly>
+                    <button type="button" id="selectSingleFileBtn">📂 选择图片</button>
+                </div>
+                <div class="note">* 支持 JPG/PNG/BMP，将按下方参数裁剪后检测</div>
+            </div>
+
+            <div class="param-row">
+                <div class="form-group">
+                    <label>📏 小图尺寸 (像素)</label>
+                    <input type="number" id="singleTileSize" value="1280" min="640" max="2048" step="32">
+                </div>
+                <div class="form-group">
+                    <label>🔲 重叠像素</label>
+                    <input type="number" id="singleOverlap" value="200" min="0" max="500" step="10">
+                </div>
+            </div>
+
+            <div class="checkbox-group">
+                <input type="checkbox" id="singleFilterEmpty" checked>
+                <label for="singleFilterEmpty">🗑️ 自动过滤空图（无人体背景）</label>
+            </div>
+            <div class="note">* 空图筛选基于图像方差</div>
+        </div>
+
+        <div class="progress-area" id="logBox">
+            <div class="log-entry log-info">✨ 请选择文件/文件夹开始...</div>
+        </div>
+
+        <div class="button-group">
+            <button class="secondary" id="backBtn" disabled style="visibility: hidden;">上一步</button>
+            <button class="primary" id="startCropBtn">🚀 开始裁剪</button>
+            <button class="secondary" id="nextBtn" disabled>下一步：前往检测 ➡️</button>
+        </div>
+    </div>
+
+    <!-- 隐藏的上传控件 -->
+    <input type="file" id="folderUploader" style="display:none" webkitdirectory directory multiple>
+    <input type="file" id="singleFileUploader" style="display:none" accept="image/*">
+
+    <script src="/static/js/crop.js"></script>
+</body>
+</html>

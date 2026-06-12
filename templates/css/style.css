@@ -30,6 +30,12 @@ h3 {
     margin-bottom: 15px;
 }
 
+.hint {
+    font-size: 13px;
+    color: #666;
+    line-height: 1.5;
+}
+
 #canvas {
     position: relative;
     width: 100%;

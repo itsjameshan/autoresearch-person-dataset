@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OverseerDoctorDiagnosis",
+  "type": "object",
+  "required": ["root_cause_hypothesis", "confidence", "recommended_action"],
+  "properties": {
+    "root_cause_hypothesis": {
+      "type": "string",
+      "description": "根因假设"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "置信度 (0.0-1.0)"
+    },
+    "recommended_action": {
+      "type": "string",
+      "enum": [
+        "batch_half",
+        "reduce_imgsz",
+        "switch_smaller_model",
+        "lr_half_and_disable_amp",
+        "retry_train",
+        "restart_agent",
+        "restart_orchestrator",
+        "force_strategy_change",
+        "clean_disk",
+        "install_package",
+        "fix_config",
+        "fix_violation",
+        "retry_with_backoff",
+        "retry_with_longer_timeout",
+        "retry_or_fallback",
+        "fallback_ollama",
+        "fix_permissions",
+        "restart_service",
+        "escalate",
+        "ignore",
+        "acknowledge"
+      ],
+      "description": "推荐修复动作"
+    },
+    "fix_detail": {
+      "type": "object",
+      "description": "修复详情，可包含 current_batch, suggested_batch, current_imgsz, suggested_imgsz, current_model, suggested_model, oom_tier, reason 等字段"
+    },
+    "needs_agent_restart": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否需要重启智能体"
+    },
+    "target_agent": {
+      "type": "string",
+      "description": "目标智能体名称 (Orchestrator, SupervisorAgent, ArchitectureSupervisor 等)"
+    }
+  }
+}

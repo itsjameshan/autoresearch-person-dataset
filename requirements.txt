@@ -1,0 +1,22 @@
+# Autoresearch dependencies
+# Install: pip install -r requirements.txt
+#
+# For CUDA support, install PyTorch separately first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# Training / evaluation
+ultralytics>=8.1.0
+numpy<2
+pyyaml
+Pillow
+
+# Inference web app (person_dataset/app_win.py)
+flask
+flask-cors
+opencv-python
+onnxruntime
+pandas
+openpyxl
+
+# Autoresearch v2 — multi-agent orchestrator (P5 HPO sweep)
+optuna>=3.5

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网页 B — 拼接与全局 NMS</title>
+    <style>
+        body { font-family: "Microsoft YaHei", sans-serif; padding: 20px; background: #f0f4ff; margin: 0; }
+        .card { background: #fff; padding: 20px; border-radius: 12px; max-width: 720px; margin: 0 auto; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+        .btn { margin: 6px 6px 0 0; padding: 8px 14px; border: none; border-radius: 8px; cursor: pointer; background: #dbeafe; color: #1e40af; font-size: 14px; }
+        .btn-green { background: #22c55e; color: #fff; }
+        .btn-orange { background: #f97316; color: #fff; }
+        .hint { font-size: 13px; color: #64748b; line-height: 1.5; }
+        a { color: #2563eb; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <p><a href="/a">← 网页 A</a> · <a href="/">体育场检测主页</a></p>
+        <h3 style="margin-top:0;">网页 B：坐标合并 + 全局 NMS + 导出</h3>
+        <p class="hint">粘贴网页 A 的 JSON；可选上传<strong>同一张</strong>原图用于画框。</p>
+        <label>全局 NMS IoU：</label>
+        <input type="number" id="mergeIou" value="0.35" step="0.05" min="0.05" max="0.95" style="width:64px">
+        <textarea id="bPayload" rows="12" style="width:100%;font-size:12px;margin-top:10px;box-sizing:border-box;" placeholder="粘贴 pipeline_a 的 JSON"></textarea>
+        <div style="margin-top:10px">
+            <input type="file" id="bImage" accept="image/*" hidden>
+            <button type="button" class="btn" onclick="document.getElementById('bImage').click()">可选：原图画框</button>
+            <span id="bImageName" style="margin-left:8px;color:#888;"></span>
+        </div>
+        <button type="button" class="btn btn-green" style="margin-top:12px" onclick="runPipelineB()">运行 pipeline_b</button>
+        <p id="bStatus" style="margin-top:12px;color:#666;"></p>
+        <p>合并人数：<strong id="bCount">—</strong></p>
+        <textarea id="bYolo" rows="8" style="width:100%;font-size:12px;box-sizing:border-box;" placeholder="合并后的 YOLO txt"></textarea>
+        <button type="button" class="btn btn-orange" style="margin-top:8px" onclick="downloadText('bYolo','merged.txt')">下载 merged.txt</button>
+        <button type="button" class="btn" style="margin-top:8px" onclick="downloadCsv()">下载 CSV</button>
+        <div id="bPreview" style="margin-top:16px"></div>
+    </div>
+    <script src="/static/js/page_b.js"></script>
+</body>
+</html>

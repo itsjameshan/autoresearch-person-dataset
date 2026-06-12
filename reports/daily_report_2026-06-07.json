@@ -1,0 +1,145 @@
+{
+  "report_date": "2026-06-07",
+  "summary": "LLM不可用，自动生成基础报告。今日完成 0 次实验，失败 97 次，最佳CDS=0.0000。",
+  "training_results": {
+    "total_experiments": 100,
+    "completed": 0,
+    "failed": 97,
+    "best_cds_today": 0.0,
+    "best_cds_overall": 0.4911,
+    "cds_improvement": -0.4911,
+    "metrics_trend": "unknown",
+    "key_metrics": {
+      "cds": 0.4911,
+      "mAP50": 0.621,
+      "mAP50_95": 0.188,
+      "precision": 0.6545,
+      "recall": 0.6623,
+      "f1_optimal": 0.6584,
+      "small_obj_recall": 0.0003,
+      "counting_acc": 0.8199,
+      "counting_mae": 3.2474,
+      "mean_confidence": 0.4357,
+      "inference_ms": 15.2,
+      "latency_score": 1.0,
+      "peak_memory_mb": 6036.1,
+      "deploy_conf": 0.2,
+      "deploy_iou_nms": 0.3,
+      "precision_gate": "FAIL(0.65<0.9)",
+      "recall_gate": "FAIL(0.66<0.85)",
+      "latency_gate": "PASS",
+      "latency_gate_ms": 115.0,
+      "target_met": false
+    }
+  },
+  "error_analysis": {
+    "total_errors": 97,
+    "error_breakdown": {
+      "oom": 0,
+      "nan_loss": 0,
+      "timeout": 0,
+      "config_error": 0,
+      "other": 97
+    },
+    "unresolved_errors": 97,
+    "need_human_intervention": true,
+    "error_details": [
+      {
+        "run_id": "optuna_hpo_20260607_193618_fd118e_t011",
+        "error_type": "failed",
+        "root_cause": "{}",
+        "resolution": "pending"
+      },
+      {
+        "run_id": "optuna_hpo_20260607_193618_fd118e_t010",
+        "error_type": "failed",
+        "root_cause": "{}",
+        "resolution": "pending"
+      },
+      {
+        "run_id": "optuna_hpo_20260607_193618_fd118e_t009",
+        "error_type": "failed",
+        "root_cause": "{}",
+        "resolution": "pending"
+      },
+      {
+        "run_id": "optuna_hpo_20260607_193618_fd118e_t008",
+        "error_type": "failed",
+        "root_cause": "{}",
+        "resolution": "pending"
+      },
+      {
+        "run_id": "optuna_hpo_20260607_193618_fd118e_t007",
+        "error_type": "failed",
+        "root_cause": "{}",
+        "resolution": "pending"
+      }
+    ]
+  },
+  "data_issues": {
+    "new_issues_today": 0,
+    "total_unresolved": 0,
+    "top_issues": []
+  },
+  "next_steps": {
+    "recommended_action": "escalate",
+    "strategy": "LLM不可用，建议检查训练日志并手动评估下一步方向。",
+    "parameter_adjustments": [],
+    "data_actions": [],
+    "risk_warnings": [
+      "LLM生成报告失败，此为自动fallback报告，建议人工检查。"
+    ]
+  },
+  "researcher_decisions_today": [
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=11 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.006177430943619523, \"BOX\": 10.19711290531",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=10 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.0011317105459661932, \"BOX\": 19.7536900389",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=9 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.002163768755814362, \"BOX\": 10.672564313397",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=8 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.019547606787757625, \"BOX\": 16.475174945004",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=7 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.0035482331950002504, \"BOX\": 14.36125290758",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=6 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.0028265938763074048, \"BOX\": 13.48419636022",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=5 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.0018625946046852751, \"BOX\": 18.99292999917",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=4 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.012106896936002164, \"BOX\": 8.1850866601741",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=3 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.00834110643236209, \"BOX\": 5.30876741443703",
+      "outcome": "unknown"
+    },
+    {
+      "action_type": "hpo_sweep",
+      "rationale": "trial=2 study=hpo_20260607_193618_fd118e params={\"LR0\": 0.0011900590783184247, \"BOX\": 17.99264218662",
+      "outcome": "unknown"
+    }
+  ]
+}

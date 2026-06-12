@@ -117,7 +117,7 @@ powershell -c "Get-Content run.log -Tail 20"
 | CPU | i5-14600KF 14 核 |
 | batch | 16, imgsz=1280 |
 | cache | "ram"（64GB 可以全部缓存） |
-| Agent | Ollama + qwen2.5-coder:14b（本地，无需云端） |
+| Agent | Ollama + gemma3:4b（本地，无需云端） |
 | 每轮耗时 | ~5-10 分钟 |
 | 冷却时间 | 30 秒（主动散热） |
 
@@ -133,7 +133,7 @@ autoresearch-person-dataset/
 ├── requirements.txt      # [Windows] Python 依赖
 ├── data_quality.py       # 标注质量检查工具（独立于循环）
 ├── build_pipeline_val.py # 大图拼接工具（从 tiles 重建原始大图）
-├── person.yaml           # 数据集配置
+├── person_dataset/       # 协同：标注工具、Flask、person.yaml、static/
 ├── results.tsv           # 实验日志（每次 keep/discard 记录）
 ├── status.md             # 实时进度面板（Agent 每轮更新）
 ├── suggestions.md        # 顾问建议文件（Codex/Ollama 写入）
@@ -170,7 +170,7 @@ git clone git@github.com:itsjameshan/autoresearch-person-dataset.git
 cd autoresearch-person-dataset
 git checkout autoresearch/crowd-win
 setup_windows.bat
-# 另一个终端: ollama serve && ollama pull qwen2.5-coder:14b
+# 另一个终端: ollama serve && ollama pull gemma3:4b
 python ollama_runner.py
 ```
 
@@ -182,7 +182,7 @@ python ollama_runner.py
 - **原始大图**：5120×3840（3×4 网格裁切而来）
 - **Pipeline 验证集**：8 张拼接大图，共 1560 个 GT 标注框
 
-> 注意：images/ 和 labels/ 目录（~1.8GB）不在 git 中。Windows 机器需要数据集在 `D:\PythonProject\person_dataset\`。
+> 注意：images/ 和 labels/（~1.8GB）不进 git。请放在仓库内 **`person_dataset/`** 下（与 `person_dataset/person.yaml` 的 `path: .` 一致），勿再使用单独的 `D:\autoresearch\person_dataset`。
 
 ## 灵感来源
 
@@ -197,6 +197,6 @@ python ollama_runner.py
 | 检测模型 | YOLOv8s / YOLOv12n/s/l (Ultralytics) |
 | 训练框架 | Ultralytics YOLO |
 | Mac Agent | Claude Code (Opus 4.6) |
-| Windows Agent | Ollama + qwen2.5-coder:14b |
+| Windows Agent | Ollama + gemma3:4b |
 | 版本管理 | Git（实验状态机） |
 | 评估指标 | CDS（自定义复合指标） |

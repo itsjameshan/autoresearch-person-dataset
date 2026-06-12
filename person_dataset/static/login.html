@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录/注册 - 体育场人群检测系统</title>
+    <link rel="stylesheet" href="/static/css/login.css">
+</head>
+<body>
+    <!-- 背景视频 -->
+    <video autoplay muted loop playsinline id="bgVideo">
+        <source src="/static/videos/login_bg.mp4" type="video/mp4">
+        <!-- 备用背景（视频加载失败时显示 CSS 渐变） -->
+    </video>
+
+    <div class="login-bg">
+        <div class="login-container">
+            <div class="login-header">
+                <h1>🏟️ 人群检测</h1>
+                <p>体育场智能分析系统</p>
+            </div>
+            <!-- 选项卡切换 -->
+            <div class="tab-bar">
+                <button id="tabLogin" class="tab-btn active">登录</button>
+                <button id="tabRegister" class="tab-btn">注册</button>
+            </div>
+
+            <!-- 登录表单（禁止自动填充） -->
+            <form id="loginForm" class="auth-form active" autocomplete="off">
+                <div class="form-group">
+                    <label>👤 用户名</label>
+                    <input type="text" id="loginUsername" placeholder="请输入用户名" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label>🔒 密码</label>
+                    <input type="password" id="loginPassword" placeholder="请输入密码" required autocomplete="new-password">
+                </div>
+                <div class="error-msg" id="loginError"></div>
+                <button type="submit" class="auth-btn">登 录</button>
+            </form>
+
+            <!-- 注册表单（禁止自动填充） -->
+            <form id="registerForm" class="auth-form" autocomplete="off">
+                <div class="form-group">
+                    <label>👤 用户名</label>
+                    <input type="text" id="regUsername" placeholder="至少3位" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label>🔒 密码</label>
+                    <input type="password" id="regPassword" placeholder="至少6位" required autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label>✓ 确认密码</label>
+                    <input type="password" id="regConfirm" placeholder="再次输入密码" required autocomplete="new-password">
+                </div>
+                <div class="error-msg" id="regError"></div>
+                <button type="submit" class="auth-btn">注 册</button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/login.js"></script>
+</body>
+</html>

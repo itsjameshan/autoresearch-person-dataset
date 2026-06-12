@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResearcherDecision",
+  "type": "object",
+  "required": ["action_type", "rationale", "estimated_gpu_minutes", "estimated_cost_usd", "needs_hitl"],
+  "properties": {
+    "action_type": {
+      "type": "string",
+      "enum": ["patch_train_config", "hpo_sweep", "add_training_data", "change_tiling", "freeze_backbone", "adjust_augmentation", "adjust_loss_weights", "change_model_size", "stop"]
+    },
+    "config_diff": {
+      "type": "object",
+      "description": "要修改的配置项。hpo_sweep时值为[min,max]数组，其他为具体值"
+    },
+    "rationale": {
+      "type": "string",
+      "description": "为什么选这个action"
+    },
+    "expected_metric_delta": {
+      "type": "object",
+      "description": "预期指标变化",
+      "properties": {
+        "cds": {"type": "number"},
+        "precision": {"type": "number"},
+        "recall": {"type": "number"},
+        "mAP50": {"type": "number"}
+      }
+    },
+    "n_trials": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "hpo_sweep时的trial数量"
+    },
+    "search_space": {
+      "type": "object",
+      "description": "hpo_sweep时的搜索空间定义"
+    },
+    "estimated_gpu_minutes": {
+      "type": "number",
+      "minimum": 0
+    },
+    "estimated_cost_usd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "needs_hitl": {
+      "type": "boolean"
+    }
+  }
+}

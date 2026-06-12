@@ -14,7 +14,7 @@ def safe_load(*args, **kwargs):
 
 torch.load = safe_load
 ultralytics.settings.set('run_dir', None)
-DATA_YAML = r"D:\PythonProject\person_dataset\person.yaml"
+DATA_YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "person_dataset", "person.yaml")
 EPOCHS = 50
 IMGSZ = 1280  # 图片尺寸
 BATCH = 8  # 批次

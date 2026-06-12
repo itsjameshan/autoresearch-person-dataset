@@ -1,0 +1,225 @@
+<!-- static/detect.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>步骤2：批量检测</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="/static/css/style.css?v=20240520005">
+    <style>
+        /* 微调容器确保内容可见 */
+        .container {
+            min-height: 100vh;
+            align-items: stretch;
+        }
+        .image-view {
+            overflow: visible !important;
+            padding-bottom: 20px;
+        }
+        .workflow-nav {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+            justify-content: flex-end;
+        }
+        .btn {
+            padding: 10px 24px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #2d6a4f;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1f4a38;
+        }
+        .btn-secondary {
+            background: #e9ecef;
+            color: #1e3c2c;
+            border: 1px solid #c0cfc6;
+        }
+        .btn-secondary:hover {
+            background: #dee2e6;
+        }
+        .btn-warning {
+            background: #e9b741;
+            color: #1e3c2c;
+        }
+        .btn-warning:hover {
+            background: #d4a12e;
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        /* 步骤指示器 */
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #4a6656;
+            font-size: 14px;
+        }
+        .step.active {
+            color: #1e3c2c;
+            font-weight: 700;
+        }
+        .step.completed {
+            color: #2d6a4f;
+        }
+        .step-number {
+            width: 26px;
+            height: 26px;
+            line-height: 26px;
+            text-align: center;
+            background: #c0cfc6;
+            color: white;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .step.active .step-number {
+            background: #2d6a4f;
+            box-shadow: 0 0 8px rgba(45,106,79,0.3);
+        }
+        .step.completed .step-number {
+            background: #40916c;
+        }
+        .arrow {
+            margin: 0 4px;
+            color: #8aa79a;
+            font-size: 16px;
+        }
+        .empty-tip {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #6c757d;
+            font-size: 16px;
+            background: rgba(255,255,255,0.7);
+            padding: 8px 20px;
+            border-radius: 30px;
+            pointer-events: none;
+        }
+        .result-table td {
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* 文件夹路径栏样式 */
+        .folder-row {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0 10px;
+        }
+        .folder-row input {
+            flex: 1;
+            padding: 12px 18px;
+            background: #fbfdff;
+            border: 1.5px solid #d0dde9;
+            border-radius: 30px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- 左侧边栏（精简版，无模型选择按钮） -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>体育场人群检测</h2>
+            <p style="font-size:12px; color:#5f7b6e; margin-top:4px;">步骤 2/3 · 批量检测</p>
+        </div>
+        <!-- 模型选择按钮已移除 -->
+    </aside>
+
+    <!-- 中间图片展示区 -->
+    <section class="image-view">
+        <!-- 步骤指示器 -->
+        <div class="step-indicator">
+            <div class="step completed"><span class="step-number">1</span> 裁剪</div>
+            <span class="arrow">→</span>
+            <div class="step active"><span class="step-number">2</span> 检测</div>
+            <span class="arrow">→</span>
+            <div class="step"><span class="step-number">3</span> 重建</div>
+        </div>
+
+        <!-- 参数栏和状态栏（移除固定参数提示） -->
+        <div class="top-bar">
+            <div class="status-bar" style="justify-content: flex-start; gap: 20px;">
+                <div class="status-item"><span class="icon">⏱️</span>检测耗时: <span id="time-cost">0.00s</span></div>
+                <div class="status-item"><span class="icon">🎯</span>检测目标: <span id="target-count">0个</span></div>
+            </div>
+        </div>
+
+        <!-- 图片容器 -->
+        <div class="image-container">
+            <img id="detect-img" src="" alt="" style="display: block; max-width: 100%; max-height: 500px; object-fit: contain; visibility: visible;">
+            <canvas id="canvas-overlay"></canvas>
+            <div class="empty-tip" id="empty-tip">📂 待检测文件夹已准备，请点击“开始检测”</div>
+        </div>
+
+        <!-- 文件夹路径 + 操作按钮 -->
+        <div class="folder-row">
+            <input type="text" id="folder-path-input" placeholder="检测文件夹路径（自动带入）" readonly>
+            <button class="btn btn-secondary" id="browse-folder-btn" title="选择本地文件夹并上传">📁 浏览</button>
+            <button class="btn btn-primary" id="start-folder-detect">▶ 开始检测</button>
+        </div>
+        <input type="file" id="folder-selector-input" style="display:none" webkitdirectory directory multiple>
+
+        <!-- 底部导航按钮 -->
+        <div class="workflow-nav">
+            <button class="btn btn-secondary" id="gotoCrop">← 上一步</button>
+            <button class="btn btn-warning" id="next-step-btn" disabled>下一步：重建 →</button>
+        </div>
+    </section>
+
+    <!-- 右侧结果面板 -->
+    <section class="right-panel">
+        <div class="result-table" style="max-height: 400px; overflow-y: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>序号</th>
+                        <th>图片</th>
+                        <th>类别</th>
+                        <th>置信度</th>
+                        <th>坐标 (x1,y1,x2,y2)</th>
+                    </tr>
+                </thead>
+                <tbody id="result-tbody"></tbody>
+            </table>
+        </div>
+
+        <!-- 总人数卡片 -->
+        <aside class="info-panel" style="margin-top: 20px;">
+            <div class="info-card stats-card">
+                <h4>📊 检测结果</h4>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span>总人数</span>
+                    <span class="stats-value" id="total-persons" style="font-size:28px; font-weight:700; color:#2d6a4f;">0</span>
+                </div>
+            </div>
+        </aside>
+    </section>
+</div>
+
+<script src="/static/js/detect.js"></script>
+</body>
+</html>

@@ -1,6 +1,8 @@
 # ==================== Dataset (images & labels) ====================
 images/
 labels/
+person_dataset/images/
+person_dataset/labels/
 *.cache
 
 # ==================== Model weights ====================
@@ -15,20 +17,27 @@ labels/
 # ==================== Training runs & results ====================
 runs/
 person_count/
+person_dataset/person_count/
+person_dataset/result/
 autoresearch_runs/
 wandb/
 result/
 run.log
+activity_events.jsonl
 
 # ==================== ONNX data ====================
 *.onnx.data
 onnx_data/
+person_dataset/onnx_data/
 weights/
 yolov12/
 
 # ==================== Web assets ====================
+# 忽略仓库根下旧 static/templates；协同用的界面在 person_dataset/static/
 static/
 templates/
+!person_dataset/static/
+!person_dataset/static/**
 
 # ==================== Archives ====================
 *.zip
@@ -61,3 +70,8 @@ desktop.ini
 
 # ==================== Claude Code ====================
 .claude/
+
+# ==================== Runtime state ====================
+autoresearch_v2/state/state.db-shm
+autoresearch_v2/state/state.db-wal
+_check_shortcut.ps1
