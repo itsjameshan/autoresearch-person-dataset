@@ -380,6 +380,9 @@ def run_training() -> bool:
     """运行训练，返回是否成功"""
     env = dict(os.environ)
     env["PYTHONUNBUFFERED"] = "1"
+    env["ULTRALYTICS_PROGRESS"] = "0"
+    env["RICH_PROGRESS"] = "0"
+    env["COLUMNS"] = "200"
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -390,26 +393,28 @@ def run_training() -> bool:
         except:
             pass
 
-    proc = subprocess.Popen(
-        [PYTHON, "-u", TRAIN_SCRIPT],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        env=env,
-        text=True, encoding="utf-8", errors="replace"
-    )
+    with open(RUN_LOG, "w", encoding="utf-8", buffering=1) as f:
+        proc = subprocess.Popen(
+            [PYTHON, "-u", TRAIN_SCRIPT],
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1
+        )
 
-    def watchdog():
-        time.sleep(TRAIN_TIMEOUT)
-        try:
-            proc.kill()
-        except:
-            pass
-    threading.Thread(target=watchdog, daemon=True).start()
+        def watchdog():
+            time.sleep(TRAIN_TIMEOUT)
+            try:
+                proc.kill()
+            except:
+                pass
+        threading.Thread(target=watchdog, daemon=True).start()
 
-    with open(RUN_LOG, "w", encoding="utf-8") as f:
-        for line in proc.stdout:
-            f.write(line)
-    proc.wait()
+        proc.wait()
+
     return proc.returncode == 0
 
 
