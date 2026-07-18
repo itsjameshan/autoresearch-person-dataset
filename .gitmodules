@@ -1,0 +1,3 @@
+[submodule "BilevelAutoresearch"]
+	path = BilevelAutoresearch
+	url = git@github.com:EdwardOptimization/Bilevel-Autoresearch.git
